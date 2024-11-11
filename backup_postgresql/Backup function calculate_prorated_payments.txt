@@ -1,0 +1,45 @@
+DECLARE 
+    payment RECORD;
+    rent RECORD;
+    days_in_month INT;
+    days_occupied INT;
+    prorated_amount DECIMAL;
+BEGIN
+    -- Pour chaque paiement existant
+    FOR payment IN 
+        SELECT 
+            p.*,
+            r.rent_value,
+            r.date_entrance,
+            r.end_date
+        FROM payments p
+        JOIN rents r ON p.rent_id = r.id
+        WHERE p.status IN ('paid', 'pending')
+    LOOP
+        -- Calculer le montant proratisé
+        prorated_amount := calculate_prorated_amount(
+            payment.date_entrance::DATE,
+            payment.end_date::DATE,
+            payment.created_at,
+            payment.rent_value::VARCHAR
+        );
+
+        -- Mettre à jour le montant du paiement
+        UPDATE payments 
+        SET amount = prorated_amount
+        WHERE id = payment.id;
+
+        -- Optionnel : Ajouter un log pour chaque mise à jour
+        RAISE NOTICE 'Paiement ID % mis à jour. Nouveau montant: %', payment.id, prorated_amount;
+    END LOOP;
+
+    -- Journaliser la fin de l'opération
+    RAISE NOTICE 'Mise à jour des paiements terminée';
+
+EXCEPTION
+    WHEN OTHERS THEN
+        -- Log en cas d'erreur
+        RAISE NOTICE 'Erreur lors de la mise à jour : %, %', SQLERRM, SQLSTATE;
+        -- Relancer l'erreur
+        RAISE;
+END;
