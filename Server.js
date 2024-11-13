@@ -8,7 +8,7 @@ const roomsRoutes = require('./routes/rooms');
 const tenantsRoutes = require('./routes/tenants');
 const rentsRoutes = require('./routes/rents');
 const paymentsRoutes = require('./routes/payments');
-const receiptsRoutes = require('./routes/receipts');p
+const receiptsRoutes = require('./routes/receipts');
 const { resetSequence } = require('./utils/dbUtils');
 
 async function initializeDatabase() {
