@@ -3,12 +3,12 @@ const cors = require('cors');
 const {sequelize} = require('./config'); // Importer la config Sequelize
 const {setupAssociations} = require('./models/associations'); // Importer les associations
 const { initializeRent } = require('./models/Rent');
-const propertiesRoutes = require('./routes/Properties'); 
+const propertiesRoutes = require(require('path').join(__dirname, 'routes', 'properties')); 
 const roomsRoutes = require('./routes/rooms');
 const tenantsRoutes = require('./routes/tenants');
 const rentsRoutes = require('./routes/rents');
 const paymentsRoutes = require('./routes/payments');
-const receiptsRoutes = require('./routes/receipts');
+const receiptsRoutes = require('./routes/receipts');p
 const { resetSequence } = require('./utils/dbUtils');
 
 async function initializeDatabase() {
