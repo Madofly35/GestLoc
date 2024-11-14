@@ -39,7 +39,10 @@ const app = express();
 
 // Configuration CORS
 app.use(cors({
-  origin: ['https://gest-loc-frontend.vercel.app'],
+  origin: [
+    "https://gest-loc-frontend-4ujcm4txd-madofly35s-projects.vercel.app",
+    "https://gest-loc-frontend.vercel.app"
+  ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
