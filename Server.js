@@ -41,7 +41,7 @@ const app = express();
 app.use(cors({
   origin: [
     "https://gest-loc-frontend.vercel.app",
-    "https://gest-loc-frontend-4ujcm4txd-madofly35s-projects.vercel.app",
+    "https://gest-loc-frontend-gvdsg7woa-madofly35s-projects.vercel.app",
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
