@@ -36,8 +36,8 @@ router.get('/:month/:year', async (req, res) => {
     const monthNum = parseInt(month);
     const yearNum = parseInt(year);
 
-    const startDate = new Date(yearNum, monthNum , 1);
-    const endDate = new Date(yearNum, monthNum+1, 0);
+    const startDate = new Date(yearNum, monthNum -2, 1);
+    const endDate = new Date(yearNum, monthNum-1, 0);
     endDate.setHours(23, 59, 59, 999);
 
     console.log('Fetching payments for period:', { 
