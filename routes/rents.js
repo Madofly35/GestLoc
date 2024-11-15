@@ -6,7 +6,7 @@ const Room = require('../models/Room');
 const Tenant = require('../models/Tenant');
 const Payment = require('../models/Payment');
 const { Op } = require('sequelize');
-const sequelize = require('../config');
+const {sequelize} = require('../config');
 
 // Créer une nouvelle location
 router.post('/', async (req, res) => {

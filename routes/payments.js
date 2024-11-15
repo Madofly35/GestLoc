@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { Op } = require('sequelize');
-const sequelize = require('../config');
+const {sequelize} = require('../config');
 const path = require('path');
 const fs = require('fs');
 const { Payment, Receipt, Rent, Tenant, Room, Property } = require('../models/associations');
