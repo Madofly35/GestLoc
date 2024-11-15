@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const Tenant = require('../models/Tenant');
 const { Op } = require('sequelize');
-const sequelize = require('../config');
+const {sequelize} = require('../config');
 
 // Récupérer tous les locataires
 router.get('/', async (req, res) => {
