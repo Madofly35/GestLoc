@@ -7,7 +7,19 @@ const fs = require('fs');
 const { Payment, Receipt, Rent, Tenant, Room, Property } = require('../models/associations');
 const { generateReceipt } = require('../utils/receiptGenerator');
 
-// Vérifier/créer le dossier de stockage des quittances
+// Fonctions de formatage des dates
+const formatDateForDB = (dateString) => {
+  if (!dateString) return null;
+  const date = new Date(dateString);
+  return date.toISOString().split('T')[0];
+};
+
+const formatDateFromDB = (dateString) => {
+  if (!dateString) return null;
+  const date = new Date(dateString);
+  return `${date.getDate().toString().padStart(2, '0')}/${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getFullYear()}`;
+};
+
 const ensureStorageExists = () => {
   const storageDir = path.join(__dirname, '..', 'storage', 'receipts');
   if (!fs.existsSync(storageDir)) {
@@ -27,7 +39,10 @@ router.get('/:month/:year', async (req, res) => {
     const startDate = new Date(yearNum, monthNum - 1, 1);
     const endDate = new Date(yearNum, monthNum, 0, 23, 59, 59);
 
-    console.log('Fetching payments for period:', { startDate, endDate });
+    console.log('Fetching payments for period:', { 
+      startDate: formatDateFromDB(startDate), 
+      endDate: formatDateFromDB(endDate)
+    });
 
     const payments = await Payment.findAll({
       where: {
@@ -65,7 +80,6 @@ router.get('/:month/:year', async (req, res) => {
       order: [['created_at', 'DESC']]
     });
 
-    // Calculer les statistiques
     const statistics = {
       expected_amount: 0,
       received_amount: 0,
@@ -76,7 +90,6 @@ router.get('/:month/:year', async (req, res) => {
     const formattedPayments = payments.map(payment => {
       const amount = parseFloat(payment.amount) || 0;
       
-      // Mise à jour des statistiques
       statistics.expected_amount += amount;
       if (payment.status === 'paid') {
         statistics.received_amount += amount;
@@ -88,7 +101,7 @@ router.get('/:month/:year', async (req, res) => {
         id: payment.id,
         amount: amount,
         status: payment.status,
-        payment_date: payment.payment_date,
+        payment_date: formatDateFromDB(payment.payment_date),
         tenant_name: payment.rent?.tenant 
           ? `${payment.rent.tenant.first_name} ${payment.rent.tenant.last_name}`
           : 'Inconnu',
@@ -119,7 +132,6 @@ router.put('/:id/mark-paid', async (req, res) => {
   try {
     console.log('🟦 Marking payment as paid:', req.params.id);
 
-    // Trouver le paiement avec ses relations
     const payment = await Payment.findOne({
       where: { id: req.params.id },
       include: [{
@@ -152,16 +164,14 @@ router.put('/:id/mark-paid', async (req, res) => {
       });
     }
 
-    // Mettre à jour le paiement
     const paymentDate = new Date();
     await payment.update({
       status: 'paid',
-      payment_date: paymentDate
+      payment_date: formatDateForDB(paymentDate)
     }, { transaction });
 
     console.log('✅ Payment updated successfully');
 
-    // Générer et enregistrer la quittance
     try {
       ensureStorageExists();
       const filePath = await generateReceipt(payment, payment.rent);
@@ -169,7 +179,7 @@ router.put('/:id/mark-paid', async (req, res) => {
       await Receipt.create({
         payment_id: payment.id,
         file_path: filePath,
-        generated_at: paymentDate
+        generated_at: formatDateForDB(paymentDate)
       }, { transaction });
 
       console.log('✅ Receipt created successfully');
@@ -185,7 +195,7 @@ router.put('/:id/mark-paid', async (req, res) => {
         id: payment.id,
         status: payment.status,
         amount: payment.amount,
-        payment_date: payment.payment_date,
+        payment_date: formatDateFromDB(payment.payment_date),
         rent: payment.rent ? {
           id: payment.rent.id,
           tenant: {
@@ -237,7 +247,6 @@ router.put('/:id/mark-unpaid', async (req, res) => {
       });
     }
 
-    // Supprimer la quittance associée si elle existe
     if (payment.paymentReceipt) {
       try {
         if (fs.existsSync(payment.paymentReceipt.file_path)) {
