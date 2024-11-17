@@ -35,7 +35,7 @@ const sequelize = new Sequelize({
     evict: 1000
   },
   retry: {
-    max: 3,
+    max: 0,
     backoffBase: 1000,
     backoffExponent: 1.5,
   },
