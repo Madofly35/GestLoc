@@ -10,6 +10,14 @@ const Rent = sequelize.define('Rent', {
   id_tenant: {
     type: DataTypes.INTEGER,
     allowNull: false,
+    validate: {
+      isInt: {
+        msg: "L'ID du locataire doit être un nombre entier"
+      },
+      notNull: {
+        msg: "L'ID du locataire est requis"
+      }
+    },
     references: {
       model: 'tenants',
       key: 'id'
@@ -18,6 +26,14 @@ const Rent = sequelize.define('Rent', {
   id_room: {
     type: DataTypes.INTEGER,
     allowNull: false,
+    validate: {
+      isInt: {
+        msg: "L'ID de la chambre doit être un nombre entier"
+      },
+      notNull: {
+        msg: "L'ID de la chambre est requis"
+      }
+    },
     references: {
       model: 'rooms',
       key: 'id'
@@ -25,53 +41,86 @@ const Rent = sequelize.define('Rent', {
   },
   date_entrance: {
     type: DataTypes.DATEONLY,
-    allowNull: false
+    allowNull: false,
+    validate: {
+      isDate: {
+        msg: 'Date d\'entrée invalide'
+      },
+      notNull: {
+        msg: 'La date d\'entrée est requise'
+      }
+    }
   },
   rent_value: {
     type: DataTypes.DECIMAL(10, 2),
-    allowNull: false
+    allowNull: false,
+    validate: {
+      isDecimal: {
+        msg: 'Le montant du loyer doit être un nombre décimal'
+      },
+      min: {
+        args: [0],
+        msg: 'Le montant du loyer doit être positif'
+      },
+      notNull: {
+        msg: 'Le montant du loyer est requis'
+      }
+    }
   },
   charges: {
     type: DataTypes.DECIMAL(10, 2),
     allowNull: false,
-    defaultValue: 0
+    defaultValue: 0,
+    validate: {
+      isDecimal: {
+        msg: 'Le montant des charges doit être un nombre décimal'
+      },
+      min: {
+        args: [0],
+        msg: 'Le montant des charges doit être positif'
+      }
+    }
   },
   end_date: {
     type: DataTypes.DATEONLY,
-    allowNull: true
+    allowNull: true,
+    validate: {
+      isDate: {
+        msg: 'Date de fin invalide'
+      },
+      laterThanStartDate(value) {
+        if (value && value <= this.date_entrance) {
+          throw new Error('La date de fin doit être postérieure à la date d\'entrée');
+        }
+      }
+    }
   }
 }, {
   tableName: 'rents',
-  timestamps: false
+  timestamps: false,
+  validate: {
+    async checkOverlappingRents() {
+      const overlapping = await Rent.findOne({
+        where: {
+          id_room: this.id_room,
+          [Op.and]: [
+            { date_entrance: { [Op.lte]: this.end_date || '9999-12-31' } },
+            { 
+              [Op.or]: [
+                { end_date: null },
+                { end_date: { [Op.gte]: this.date_entrance } }
+              ]
+            }
+          ],
+          id: { [Op.ne]: this.id } // Exclure la location actuelle en cas de mise à jour
+        }
+      });
+
+      if (overlapping) {
+        throw new Error('Cette période chevauche une location existante');
+      }
+    }
+  }
 });
 
-// Fonction simplifiée pour réinitialiser la séquence
-async function resetRentSequence() {
-  try {
-    await sequelize.query(`
-      SELECT setval('rents_id_seq', (SELECT COALESCE(MAX(id), 0) + 1 FROM rents), false);
-    `);
-    console.log('✅ Séquence rents_id_seq réinitialisée avec succès');
-  } catch (error) {
-    console.error('🔴 Erreur lors de la réinitialisation de la séquence:', error);
-    throw error;
-  }
-}
-
-// Fonction d'initialisation
-async function initializeRent() {
-  try {
-    await Rent.sync();
-    await resetRentSequence();
-    console.log('✅ Modèle Rent initialisé avec succès');
-  } catch (error) {
-    console.error('🔴 Erreur lors de l\'initialisation du modèle Rent:', error);
-    throw error;
-  }
-}
-
-module.exports = { 
-  Rent, 
-  initializeRent,
-  resetRentSequence 
-};
+module.exports = { Rent };
