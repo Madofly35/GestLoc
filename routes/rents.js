@@ -13,7 +13,42 @@ router.post('/', async (req, res) => {
   const transaction = await sequelize.transaction();
   
   try {
-    // Vérifier si la chambre n'est pas déjà louée sur cette période
+    // 1. Validation des données reçues
+    console.log('Données reçues:', req.body);
+    
+    if (!req.body.id_tenant || !req.body.id_room || !req.body.date_entrance || !req.body.rent_value) {
+      await transaction.rollback();
+      return res.status(400).json({ 
+        message: 'Données requises manquantes',
+        received: {
+          id_tenant: req.body.id_tenant,
+          id_room: req.body.id_room,
+          date_entrance: req.body.date_entrance,
+          rent_value: req.body.rent_value
+        }
+      });
+    }
+
+    // 2. Vérification que le locataire et la chambre existent
+    const [tenant, room] = await Promise.all([
+      Tenant.findByPk(req.body.id_tenant, { transaction }),
+      Room.findByPk(req.body.id_room, { transaction })
+    ]);
+
+    if (!tenant || !room) {
+      await transaction.rollback();
+      return res.status(400).json({ 
+        message: !tenant ? 'Locataire non trouvé' : 'Chambre non trouvée' 
+      });
+    }
+
+    // 3. Vérification des chevauchements avec plus de logs
+    console.log('Recherche de chevauchements pour:', {
+      room_id: req.body.id_room,
+      date_entrance: req.body.date_entrance,
+      end_date: req.body.end_date
+    });
+
     const overlappingRent = await Rent.findOne({
       where: {
         id_room: req.body.id_room,
@@ -38,30 +73,51 @@ router.post('/', async (req, res) => {
           }
         ]
       },
-      transaction
+      transaction,
+      logging: console.log // Activer le logging SQL
     });
 
     if (overlappingRent) {
+      console.log('Chevauchement trouvé:', overlappingRent.toJSON());
       await transaction.rollback();
       return res.status(400).json({ 
-        message: 'Cette chambre est déjà louée pendant cette période' 
+        message: 'Cette chambre est déjà louée pendant cette période',
+        conflict: {
+          existing_rent: {
+            date_entrance: overlappingRent.date_entrance,
+            end_date: overlappingRent.end_date
+          },
+          requested_period: {
+            date_entrance: req.body.date_entrance,
+            end_date: req.body.end_date
+          }
+        }
       });
     }
 
-    // Formater les données avant création
+    // 4. Formatage des données avec validation des types
     const rentData = {
       id_tenant: parseInt(req.body.id_tenant),
       id_room: parseInt(req.body.id_room),
-      date_entrance: req.body.date_entrance,
+      date_entrance: new Date(req.body.date_entrance).toISOString().split('T')[0],
       rent_value: parseFloat(req.body.rent_value),
       charges: parseFloat(req.body.charges || 0),
-      ...(req.body.end_date && { end_date: req.body.end_date })
+      end_date: req.body.end_date ? new Date(req.body.end_date).toISOString().split('T')[0] : null
     };
 
-    const rent = await Rent.create(rentData, { transaction });
+    console.log('Données formatées pour création:', rentData);
+
+    // 5. Création de la location
+    const rent = await Rent.create(rentData, { 
+      transaction,
+      logging: console.log // Activer le logging SQL
+    });
+
+    // 6. Commit de la transaction
     await transaction.commit();
+    console.log('Transaction validée avec succès');
     
-    // Récupérer la location créée avec ses relations
+    // 7. Récupération des données complètes
     const newRent = await Rent.findByPk(rent.id, {
       include: [
         {
@@ -78,12 +134,25 @@ router.post('/', async (req, res) => {
     });
 
     res.status(201).json(newRent);
+
   } catch (error) {
     await transaction.rollback();
-    console.error('Erreur création location:', error);
+    console.error('Erreur détaillée:', {
+      message: error.message,
+      stack: error.stack,
+      name: error.name,
+      sql: error.sql,
+      parameters: error.parameters
+    });
+    
     res.status(500).json({ 
       message: 'Erreur lors de la création de la location',
-      error: error.message 
+      error: error.message,
+      details: process.env.NODE_ENV === 'development' ? {
+        name: error.name,
+        sql: error.sql,
+        parameters: error.parameters
+      } : undefined
     });
   }
 });
