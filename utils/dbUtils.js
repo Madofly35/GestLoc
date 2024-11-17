@@ -1,5 +1,5 @@
 // backend/utils/dbUtils.js
-const sequelize = require('../config');
+const {sequelize} = require('../config');
 
 async function resetSequence(tableName) {
   try {
