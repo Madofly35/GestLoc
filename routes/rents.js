@@ -13,37 +13,18 @@ router.post('/', async (req, res) => {
   let transaction;
   
   try {
-    // 1. Création de la transaction
-    transaction = await sequelize.transaction({
-      isolationLevel: sequelize.Transaction.ISOLATION_LEVELS.SERIALIZABLE
-    });
+    console.log('Données reçues:', req.body);
 
-    // 2. Vérification des chevauchements avec une requête plus précise
-    const overlappingRent = await Rent.findOne({
-      where: {
-        id_room: req.body.id_room,
-        [Op.and]: [
-          { date_entrance: { [Op.lte]: req.body.end_date || '9999-12-31' } },
-          { 
-            [Op.or]: [
-              { end_date: null },
-              { end_date: { [Op.gte]: req.body.date_entrance } }
-            ]
-          }
-        ]
-      },
-      transaction,
-      lock: transaction.LOCK.UPDATE
-    });
-
-    if (overlappingRent) {
-      await transaction.rollback();
-      return res.status(400).json({ 
-        message: 'Cette chambre est déjà louée pendant cette période' 
+    // Validation préliminaire des données
+    if (!req.body.id_tenant || !req.body.id_room || !req.body.date_entrance || !req.body.rent_value) {
+      return res.status(400).json({
+        message: 'Données manquantes',
+        required: ['id_tenant', 'id_room', 'date_entrance', 'rent_value'],
+        received: req.body
       });
     }
 
-    // 3. Formatage et validation des données
+    // Formatage des données
     const rentData = {
       id_tenant: parseInt(req.body.id_tenant),
       id_room: parseInt(req.body.id_room),
@@ -54,19 +35,36 @@ router.post('/', async (req, res) => {
         new Date(req.body.end_date).toISOString().split('T')[0] : null
     };
 
-    // 4. Création de la location avec options spécifiques
-    const rent = await Rent.create(rentData, { 
+    console.log('Données formatées:', rentData);
+
+    // Début de la transaction
+    transaction = await sequelize.transaction();
+
+    // Vérification de l'existence du locataire et de la chambre
+    const [tenant, room] = await Promise.all([
+      Tenant.findByPk(rentData.id_tenant, { transaction }),
+      Room.findByPk(rentData.id_room, { transaction })
+    ]);
+
+    if (!tenant || !room) {
+      await transaction.rollback();
+      return res.status(400).json({
+        message: !tenant ? 'Locataire non trouvé' : 'Chambre non trouvée',
+        id_tenant: rentData.id_tenant,
+        id_room: rentData.id_room
+      });
+    }
+
+    // Création de la location
+    const rent = await Rent.create(rentData, {
       transaction,
-      validate: true,
-      retry: {
-        max: 0 // Désactive les retries automatiques
-      }
+      validate: true
     });
 
-    // 5. Commit de la transaction
+    // Commit de la transaction
     await transaction.commit();
 
-    // 6. Récupération des données complètes hors transaction
+    // Récupération des données complètes
     const newRent = await Rent.findByPk(rent.id, {
       include: [
         {
@@ -85,18 +83,26 @@ router.post('/', async (req, res) => {
     res.status(201).json(newRent);
 
   } catch (error) {
-    // S'assurer que le rollback est effectué si la transaction existe
     if (transaction) await transaction.rollback();
-    
+
+    // Gestion spécifique des erreurs de validation
+    if (error.name === 'SequelizeValidationError') {
+      return res.status(400).json({
+        message: 'Erreur de validation',
+        errors: error.errors.map(err => ({
+          field: err.path,
+          message: err.message
+        }))
+      });
+    }
+
     console.error('Erreur détaillée:', {
       message: error.message,
-      stack: error.stack,
-      sql: error.sql,
-      parameters: error.parameters,
-      name: error.name
+      name: error.name,
+      errors: error.errors
     });
 
-    res.status(500).json({ 
+    res.status(500).json({
       message: 'Erreur lors de la création de la location',
       error: error.message
     });
