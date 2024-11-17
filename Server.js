@@ -42,6 +42,8 @@ app.use(cors({
   origin: [
     "https://gest-loc-frontend.vercel.app",
     "https://gest-loc-frontend-gvdsg7woa-madofly35s-projects.vercel.app",
+    'https://gest-loc-frontend-1jvdf9yy9-madofly35s-projects.vercel.app',
+    /\.vercel\.app$/ // Pour accepter tous les sous-domaines Vercel
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
@@ -51,25 +53,6 @@ app.use(cors({
 // Middleware pour parser le JSON
 app.use(express.json());
 
-// Initialisation de la base de données
-async function initializeDatabase() {
-  try {
-    // Test de la connexion
-    await sequelize.authenticate();
-    console.log('✅ Connexion à la base de données établie avec succès.');
-
-    // Configuration des associations
-    setupAssociations();
-    console.log('✅ Associations des modèles configurées.');
-
-    // Synchronisation des modèles avec la base de données
-    await sequelize.sync();
-    console.log('✅ Modèles synchronisés avec la base de données.');
-  } catch (error) {
-    console.error('❌ Erreur lors de l\'initialisation de la base de données:', error);
-    process.exit(1); // Arrêter le serveur en cas d'erreur critique
-  }
-}
 
 // Routes
 app.use('/api/properties', propertiesRoutes);
@@ -78,6 +61,8 @@ app.use('/api/tenants', tenantsRoutes);
 app.use('/api/rents', rentsRoutes);
 app.use('/api/payments', paymentsRoutes);
 app.use('/api', receiptsRoutes);
+app.options('*', cors());
+
 
 // Ajouter après vos autres routes
 app.get('/api/test', async (req, res) => {
