@@ -10,114 +10,63 @@ const {sequelize} = require('../config');
 
 // Créer une nouvelle location
 router.post('/', async (req, res) => {
-  const transaction = await sequelize.transaction();
+  let transaction;
   
   try {
-    // 1. Validation des données reçues
-    console.log('Données reçues:', req.body);
-    
-    if (!req.body.id_tenant || !req.body.id_room || !req.body.date_entrance || !req.body.rent_value) {
-      await transaction.rollback();
-      return res.status(400).json({ 
-        message: 'Données requises manquantes',
-        received: {
-          id_tenant: req.body.id_tenant,
-          id_room: req.body.id_room,
-          date_entrance: req.body.date_entrance,
-          rent_value: req.body.rent_value
-        }
-      });
-    }
-
-    // 2. Vérification que le locataire et la chambre existent
-    const [tenant, room] = await Promise.all([
-      Tenant.findByPk(req.body.id_tenant, { transaction }),
-      Room.findByPk(req.body.id_room, { transaction })
-    ]);
-
-    if (!tenant || !room) {
-      await transaction.rollback();
-      return res.status(400).json({ 
-        message: !tenant ? 'Locataire non trouvé' : 'Chambre non trouvée' 
-      });
-    }
-
-    // 3. Vérification des chevauchements avec plus de logs
-    console.log('Recherche de chevauchements pour:', {
-      room_id: req.body.id_room,
-      date_entrance: req.body.date_entrance,
-      end_date: req.body.end_date
+    // 1. Création de la transaction
+    transaction = await sequelize.transaction({
+      isolationLevel: sequelize.Transaction.ISOLATION_LEVELS.SERIALIZABLE
     });
 
+    // 2. Vérification des chevauchements avec une requête plus précise
     const overlappingRent = await Rent.findOne({
       where: {
         id_room: req.body.id_room,
-        [Op.or]: [
-          {
-            [Op.and]: {
-              date_entrance: { [Op.lte]: req.body.date_entrance },
-              [Op.or]: [
-                { end_date: { [Op.gte]: req.body.date_entrance } },
-                { end_date: null }
-              ]
-            }
-          },
-          {
-            [Op.and]: {
-              date_entrance: { [Op.lte]: req.body.end_date || '9999-12-31' },
-              [Op.or]: [
-                { end_date: { [Op.gte]: req.body.end_date || '9999-12-31' } },
-                { end_date: null }
-              ]
-            }
+        [Op.and]: [
+          { date_entrance: { [Op.lte]: req.body.end_date || '9999-12-31' } },
+          { 
+            [Op.or]: [
+              { end_date: null },
+              { end_date: { [Op.gte]: req.body.date_entrance } }
+            ]
           }
         ]
       },
       transaction,
-      logging: console.log // Activer le logging SQL
+      lock: transaction.LOCK.UPDATE
     });
 
     if (overlappingRent) {
-      console.log('Chevauchement trouvé:', overlappingRent.toJSON());
       await transaction.rollback();
       return res.status(400).json({ 
-        message: 'Cette chambre est déjà louée pendant cette période',
-        conflict: {
-          existing_rent: {
-            date_entrance: overlappingRent.date_entrance,
-            end_date: overlappingRent.end_date
-          },
-          requested_period: {
-            date_entrance: req.body.date_entrance,
-            end_date: req.body.end_date
-          }
-        }
+        message: 'Cette chambre est déjà louée pendant cette période' 
       });
     }
 
-    // 4. Formatage des données avec validation des types
+    // 3. Formatage et validation des données
     const rentData = {
       id_tenant: parseInt(req.body.id_tenant),
       id_room: parseInt(req.body.id_room),
       date_entrance: new Date(req.body.date_entrance).toISOString().split('T')[0],
       rent_value: parseFloat(req.body.rent_value),
       charges: parseFloat(req.body.charges || 0),
-      end_date: req.body.end_date ? new Date(req.body.end_date).toISOString().split('T')[0] : null
+      end_date: req.body.end_date ? 
+        new Date(req.body.end_date).toISOString().split('T')[0] : null
     };
 
-    console.log('Données formatées pour création:', rentData);
-
-    // 5. Création de la location
+    // 4. Création de la location avec options spécifiques
     const rent = await Rent.create(rentData, { 
       transaction,
-      logging: console.log // Activer le logging SQL
+      validate: true,
+      retry: {
+        max: 0 // Désactive les retries automatiques
+      }
     });
 
-    // 6. Commit de la transaction
+    // 5. Commit de la transaction
     await transaction.commit();
-    console.log('Transaction validée avec succès');
-    
-    // 7. Récupération des données complètes
+
+    // 6. Récupération des données complètes hors transaction
     const newRent = await Rent.findByPk(rent.id, {
       include: [
         {
@@ -136,23 +85,20 @@ router.post('/', async (req, res) => {
     res.status(201).json(newRent);
 
   } catch (error) {
-    await transaction.rollback();
+    // S'assurer que le rollback est effectué si la transaction existe
+    if (transaction) await transaction.rollback();
+    
     console.error('Erreur détaillée:', {
       message: error.message,
       stack: error.stack,
-      name: error.name,
       sql: error.sql,
-      parameters: error.parameters
+      parameters: error.parameters,
+      name: error.name
     });
-    
+
     res.status(500).json({ 
       message: 'Erreur lors de la création de la location',
-      error: error.message,
-      details: process.env.NODE_ENV === 'development' ? {
-        name: error.name,
-        sql: error.sql,
-        parameters: error.parameters
-      } : undefined
+      error: error.message
     });
   }
 });
