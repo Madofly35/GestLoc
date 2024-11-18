@@ -1,125 +1,84 @@
 const PDFDocument = require('pdfkit');
+const crypto = require('crypto');
+const qr = require('qrcode');
+const { SignPdf } = require('node-signpdf');
 const fs = require('fs');
 const path = require('path');
-const { SignPdf } = require('node-signpdf');
-const signer = new SignPdf();
+const storageService = require('../services/storageService');
 
-// Configuration du certificat
-const CERTIFICATE_CONFIG = {
-  p12Path: path.join(__dirname, '..', 'certificates', 'signature.p12'), // Chemin vers votre certificat P12
-  certPassword: 'BBnn,,1122' // Mot de passe de votre certificat
-};
-
-async function signPDF(inputPath) {
-  try {
-    // Lire le PDF non signé
-    const pdfBuffer = fs.readFileSync(inputPath);
-    
-    // Lire le certificat P12
-    const p12Buffer = fs.readFileSync(CERTIFICATE_CONFIG.p12Path);
-
-    // Signer le PDF
-    const signedPdf = await signer.sign(pdfBuffer, p12Buffer, {
-      passphrase: CERTIFICATE_CONFIG.certPassword,
-      reason: 'Quittance de loyer',
-      location: OWNER_INFO.city,
-      signerName: OWNER_INFO.company,
-      annotationAppearanceOptions: {
-        signatureCoordinates: { left: 50, bottom: 100, right: 200, top: 150 },
-        signatureDetails: [
-          `Signé numériquement par: ${OWNER_INFO.company}`,
-          `Date: ${new Date().toLocaleDateString('fr-FR')}`,
-          'Raison: Quittance de loyer'
-        ]
-      }
-    });
-
-    // Écrire le PDF signé
-    fs.writeFileSync(inputPath, signedPdf);
-    console.log('✅ PDF successfully signed');
-
-  } catch (error) {
-    console.error('🔴 Error signing PDF:', error);
-    throw error;
-  }
-}
-
-
-function ensureDirectoryExistsSync(directoryPath) {
-  if (!fs.existsSync(directoryPath)) {
-    fs.mkdirSync(directoryPath, { recursive: true });
-    console.log('✅ Directory created:', directoryPath);
-  }
-}
-
-// Configuration du bailleur
 const OWNER_INFO = {
-  name: 'PARDOUX Pierre',           // Remplacez par le nom réel du bailleur
-  company: '',          // Remplacez par le nom de la société
-  address: '30 avenue Esprit Brondino',   // Remplacez par l'adresse réelle
-  postalCode: '13290',         // Remplacez par le code postal réel
-  city: 'AIX EN PROVENCE'         // Remplacez par la ville réelle
+  name: 'PARDOUX Pierre',
+  company: '',
+  address: '30 avenue Esprit Brondino',
+  postalCode: '13290',
+  city: 'AIX EN PROVENCE',
+  siret: '123456789'
 };
 
-async function generateReceipt(payment, rent) {
-  return new Promise((resolve, reject) => {
-    try {
-      console.log('🟦 Starting receipt generation for payment:', payment.id);
-      
-      // Vérification des données requises
-      if (!payment || !rent || !rent.tenant || !rent.room || !rent.room.property) {
-        throw new Error('Données manquantes pour la génération de la quittance');
-      }
+class ReceiptGenerator {
+  constructor() {
+    this.signaturePath = path.join(__dirname, '../config/signature.p12');
+    this.signaturePassword = process.env.SIGNATURE_PASSWORD;
+    this.verificationUrl = process.env.VERIFICATION_URL;
+    this.hashSecret = process.env.HASH_SECRET;
+  }
 
-      // Convertir tous les montants en nombres et calculs
+  createDocumentHash(payment, rent, date) {
+    return crypto
+      .createHash('sha256')
+      .update(`${payment.id}-${rent.id}-${date}-${this.hashSecret}`)
+      .digest('hex');
+  }
+
+  async generateVerificationQR(hash) {
+    return await qr.toDataURL(`${this.verificationUrl}/verify/${hash}`);
+  }
+
+  async signPDF(pdfBuffer) {
+    const signer = new SignPdf();
+    return await signer.signPDF(pdfBuffer, {
+      certificatePath: this.signaturePath,
+      password: this.signaturePassword
+    });
+  }
+
+  async generateReceipt(payment, rent) {
+    try {
+      let chunks = [];
+      const doc = new PDFDocument({
+        size: 'A4',
+        margin: 50,
+        info: {
+          Title: `Quittance de loyer - ${rent.tenant.first_name} ${rent.tenant.last_name}`,
+          Author: OWNER_INFO.name,
+          Subject: 'Quittance de loyer',
+          Keywords: 'quittance, loyer, location'
+        }
+      });
+
+      // Collecter les chunks du PDF
+      doc.on('data', chunk => chunks.push(chunk));
+
+      // Format des montants
       const totalAmount = parseFloat(rent.rent_value) || 0;
       const chargesAmount = parseFloat(rent.charges) || 0;
-      const rentAmount = totalAmount - chargesAmount; // Loyer hors charges
+      const rentAmount = totalAmount - chargesAmount;
 
-      console.log('🟦 Amounts calculated:', {
-        total: totalAmount,
-        charges: chargesAmount,
-        rentOnly: rentAmount
-      });
+      // Date de la quittance
+      const paymentDate = new Date(payment.payment_date);
+      const month = paymentDate.toLocaleDateString('fr-FR', { month: 'long' });
+      const year = paymentDate.getFullYear();
 
-      // Création des chemins avec vérification
-      const storageDir = path.resolve(__dirname, '..', 'storage');
-      const receiptsDir = path.join(storageDir, 'receipts');
-      const date = new Date(payment.payment_date);
-      const month = date.toLocaleDateString('fr-FR', { month: 'long' });
-      const year = date.getFullYear();
-      const yearDir = path.join(receiptsDir, year.toString());
-      const monthDir = path.join(yearDir, month);
-
-      // Création des répertoires si nécessaire
-      [storageDir, receiptsDir, yearDir, monthDir].forEach(dir => {
-        ensureDirectoryExistsSync(dir);
-      });
-
-      const filename = `quittance_${payment.id}.pdf`;
-      const absoluteFilePath = path.join(monthDir, filename);
-      const relativeFilePath = path.join('storage', 'receipts', year.toString(), month, filename)
-        .split(path.sep)
-        .join('/');
-
-      console.log('🟦 Generating receipt at:', absoluteFilePath);
-
-      const doc = new PDFDocument();
-      const writeStream = fs.createWriteStream(absoluteFilePath);
-
-      writeStream.on('error', (error) => {
-        console.error('🔴 Write Stream Error:', error);
-        reject(error);
-      });
-
-      doc.pipe(writeStream);
+      // Créer le hash et QR code
+      const documentHash = this.createDocumentHash(payment, rent, paymentDate);
+      const qrCodeDataUrl = await this.generateVerificationQR(documentHash);
 
       // En-tête
       doc.fontSize(20)
          .text('QUITTANCE DE LOYER', { align: 'center' })
          .moveDown();
 
-      // Mois et année
+      // Période
       doc.fontSize(14)
          .text(`${month} ${year}`, { align: 'center' })
          .moveDown()
@@ -132,6 +91,7 @@ async function generateReceipt(payment, rent) {
          .text(OWNER_INFO.company)
          .text(OWNER_INFO.address)
          .text(`${OWNER_INFO.postalCode} ${OWNER_INFO.city}`)
+         .text(`SIRET: ${OWNER_INFO.siret}`)
          .moveDown()
          .moveDown();
 
@@ -156,59 +116,69 @@ async function generateReceipt(payment, rent) {
 
       // Texte de quittance
       doc.text(
-        `Je soussigné ${OWNER_INFO.company}, bailleur, donne quittance à ${rent.tenant.first_name} ${rent.tenant.last_name} ` +
-        `pour la somme de ${totalAmount.toFixed(2)} euros, ` +
-        `au titre du loyer et des charges du logement désigné ci-dessus ` +
+        `Je soussigné ${OWNER_INFO.name}, propriétaire du logement désigné ci-dessus, ` +
+        `déclare avoir reçu de ${rent.tenant.first_name} ${rent.tenant.last_name} ` +
+        `la somme de ${totalAmount.toFixed(2)} euros ` +
+        `(loyer : ${rentAmount.toFixed(2)} euros, charges : ${chargesAmount.toFixed(2)} euros) ` +
+        `au titre du loyer et des charges ` +
         `pour la période du 1er au dernier jour du mois de ${month} ${year}.`
       )
       .moveDown()
       .moveDown();
 
-      // Date et signature
+      // Date et signature électronique
       const currentDate = new Date().toLocaleDateString('fr-FR');
       doc.text(`Fait à ${OWNER_INFO.city}, le ${currentDate}`)
          .moveDown()
          .moveDown()
-         .text('Signature du bailleur :')
-         .moveDown()
+         .text('Signature électronique sécurisée :')
          .moveDown();
 
-      // Pied de page
+      // QR Code et informations de vérification
+      doc.image(qrCodeDataUrl, {
+        fit: [100, 100],
+        align: 'center'
+      });
+
       doc.fontSize(8)
-         .text(
-           'Cette quittance annule tous les reçus qui auraient pu être établis précédemment en cas de paiement partiel du montant ci-dessus.',
-           { align: 'center' }
-         );
+         .moveDown()
+         .text('Pour vérifier l\'authenticité de ce document, scannez le QR code ci-dessus', { align: 'center' })
+         .text(`ou visitez ${this.verificationUrl}/verify/${documentHash}`, { align: 'center' })
+         .text(`ID de vérification: ${documentHash.substring(0, 8)}`, { align: 'center' })
+         .text(`Document signé électroniquement le ${new Date().toLocaleString('fr-FR')}`, { align: 'center' });
 
-      //  on attend la signature
-      writeStream.on('finish', async () => {
-        try {
-          // Signer le PDF après sa génération
-          await signPDF(absoluteFilePath);
-          console.log('✅ Receipt generated and signed successfully:', relativeFilePath);
-          resolve(relativeFilePath);
-        } catch (signError) {
-          console.error('🔴 Error during signing:', signError);
-          reject(signError);
-        }
-      });
-
-      writeStream.on('error', (error) => {
-        console.error('🔴 Write Stream Error:', error);
-        reject(error);
-      });
-
-      // Finalisation du document
+      // Finaliser le document
       doc.end();
 
+      // Attendre la génération complète
+      const pdfBuffer = Buffer.concat(chunks);
+
+      // Signer le PDF
+      const signedPdf = await this.signPDF(pdfBuffer);
+
+      // Upload vers Supabase Storage
+      const storagePath = storageService.getReceiptPath(paymentDate, rent.tenant.id);
+      const filename = `quittance_${payment.id}_${month}_${year}.pdf`;
+
+      const storageFile = await storageService.uploadFile({
+        originalname: filename,
+        buffer: signedPdf,
+        mimetype: 'application/pdf'
+      }, storageService.buckets.receipts, storagePath);
+
+      return {
+        path: storageFile.path,
+        url: storageFile.url,
+        filename,
+        verificationHash: documentHash,
+        signedAt: new Date()
+      };
+
     } catch (error) {
-      console.error('🔴 Error in generateReceipt:', error);
-      reject(error);
+      console.error('Erreur génération quittance:', error);
+      throw error;
     }
-  });
+  }
 }
 
-module.exports = {
-  generateReceipt,
-  ensureDirectoryExistsSync
-};
+module.exports = new ReceiptGenerator();

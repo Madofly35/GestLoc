@@ -26,7 +26,16 @@ const Receipt = sequelize.define('Receipt', {
   downloaded_at: {
     type: DataTypes.DATE,
     allowNull: true
+  },
+  storage_path: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
+  storage_url: {
+    type: DataTypes.STRING,
+    allowNull: true
   }
+
 }, {
   tableName: 'receipts',
   timestamps: false,

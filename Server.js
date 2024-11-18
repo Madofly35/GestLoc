@@ -10,6 +10,8 @@ const rentsRoutes = require('./routes/rents');
 const paymentsRoutes = require('./routes/payments');
 const receiptsRoutes = require('./routes/receipts');
 const { resetSequence } = require('./utils/dbUtils');
+const verificationRoutes = require('./routes/verification');
+const documentsRoutes = require('./routes/documents');
 
 async function initializeDatabase() {
   try {
@@ -61,6 +63,8 @@ app.use('/api/tenants', tenantsRoutes);
 app.use('/api/rents', rentsRoutes);
 app.use('/api/payments', paymentsRoutes);
 app.use('/api', receiptsRoutes);
+app.use('/api', verificationRoutes);
+app.use('/api', documentsRoutes);
 app.options('*', cors());
 
 
