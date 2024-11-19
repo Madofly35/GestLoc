@@ -7,19 +7,29 @@ class StorageService {
       process.env.SUPABASE_KEY
     );
     
+    // Alignement avec la structure Supabase
     this.buckets = {
-      receipts: 'tenant-receipts',
-      contracts: 'tenant-contracts',
       documents: 'tenant-documents',
-      tickets: 'maintenance-tickets'
+      contracts: 'tenant-contracts',
+      receipts: 'tenant-receipts',
+      pictures: 'proprieties-pictures'
     };
+  }
+
+  getReceiptPath(payment, tenant) {
+    const date = new Date(payment.payment_date);
+    const year = date.getFullYear();
+    const month = date.toLocaleDateString('fr-FR', { month: 'long' });
+    
+    // Format: tenant-receipts/tenant_[ID]/[YEAR]/[MONTH]/receipt_[PAYMENT_ID].pdf
+    return `tenant_${tenant.id}/${year}/${month}/receipt_${payment.id}.pdf`;
   }
 
   async uploadFile(file, bucketName, filePath) {
     const { data, error } = await this.supabase.storage
       .from(bucketName)
       .upload(filePath, file.buffer || file, {
-        contentType: file.mimetype,
+        contentType: file.mimetype || 'application/pdf',
         upsert: true
       });
 
@@ -30,7 +40,7 @@ class StorageService {
       .createSignedUrl(filePath, 3600); // URL valide 1h
 
     return {
-      path: data.path,
+      path: filePath,
       url: urlData.signedUrl
     };
   }
@@ -50,13 +60,7 @@ class StorageService {
       .remove([filePath]);
 
     if (error) throw error;
-    return true;  
-  }
-
-  getReceiptPath(paymentId, date, tenantId) {
-    const year = date.getFullYear();
-    const month = date.toLocaleDateString('fr-FR', { month: 'long' });
-    return `${year}/${month}/tenant_${tenantId}/quittance_${paymentId}.pdf`;
+    return true;
   }
 }
 
