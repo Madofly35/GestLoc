@@ -5,6 +5,50 @@ const { SignPdf } = require('node-signpdf');
 const fs = require('fs');
 const path = require('path');
 const storageService = require('../services/storageService');
+const forge = require('node-forge');
+
+function createSignature(pdfBuffer) {
+  // Charger le certificat P12
+  const p12Path = path.join(__dirname, '..', 'certificates', 'signature.p12');
+  const p12Der = fs.readFileSync(p12Path, 'binary');
+  const p12Asn1 = forge.asn1.fromDer(p12Der);
+  const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, 'BBnn,,1122');
+
+  // Extraire la clé privée et le certificat
+  const keyBag = p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag })[forge.pki.oids.pkcs8ShroudedKeyBag][0];
+  const privateKey = keyBag.key;
+  const certBag = p12.getBags({ bagType: forge.pki.oids.certBag })[forge.pki.oids.certBag][0];
+  const certificate = certBag.cert;
+
+  // Créer la signature
+  const md = forge.md.sha256.create();
+  md.update(pdfBuffer.toString('binary'));
+  const signature = privateKey.sign(md);
+
+  return Buffer.from(signature, 'binary');
+}
+
+// Remplacer la fonction signPDF existante par :
+async function signPDF(inputPath) {
+  try {
+    const pdfBuffer = fs.readFileSync(inputPath);
+    const signature = createSignature(pdfBuffer);
+    
+    // Ajouter la signature au PDF
+    const signedPdfBuffer = Buffer.concat([
+      pdfBuffer,
+      Buffer.from('%SignedBy: Pierre PARDOUX\n'),
+      signature
+    ]);
+    
+    fs.writeFileSync(inputPath, signedPdfBuffer);
+    console.log('✅ PDF successfully signed');
+  } catch (error) {
+    console.error('🔴 Error signing PDF:', error);
+    throw error;
+  }
+}
+
 
 const OWNER_INFO = {
   name: 'PARDOUX Pierre',
