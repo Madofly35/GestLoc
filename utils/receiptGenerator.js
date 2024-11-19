@@ -71,10 +71,6 @@ async function generateReceipt(payment, rent) {
         throw new Error('Données manquantes pour la génération de la quittance');
       }
 
-      const totalAmount = parseFloat(rent.rent_value) || 0;
-      const chargesAmount = parseFloat(rent.charges) || 0;
-      const rentAmount = totalAmount - chargesAmount;
-
       const buffers = [];
       const doc = new PDFDocument();
       
@@ -85,13 +81,11 @@ async function generateReceipt(payment, rent) {
           const pdfBuffer = Buffer.concat(buffers);
           const signedPdfBuffer = addDigitalSignature(pdfBuffer);
 
+          // Créer le chemin selon la nouvelle structure
           const date = new Date(payment.payment_date);
-          const filePath = storageService.getReceiptPath(
-            payment.id,
-            date,
-            rent.tenant.id
-          );
+          const filePath = `tenant_${rent.tenant.id}/${date.getFullYear()}/${date.toLocaleDateString('fr-FR', { month: 'long' })}/receipt_${payment.id}.pdf`;
 
+          // Upload sur Supabase
           const result = await storageService.uploadFile(
             { 
               buffer: signedPdfBuffer,
@@ -101,7 +95,10 @@ async function generateReceipt(payment, rent) {
             filePath
           );
 
-          resolve(result.path);
+          resolve({
+            path: filePath,
+            url: result.url
+          });
         } catch (error) {
           reject(error);
         }
@@ -112,6 +109,7 @@ async function generateReceipt(payment, rent) {
          .text('QUITTANCE DE LOYER', { align: 'center' })
          .moveDown();
 
+    
       const date = new Date(payment.payment_date);
       const month = date.toLocaleDateString('fr-FR', { month: 'long' });
       const year = date.getFullYear();
@@ -138,6 +136,10 @@ async function generateReceipt(payment, rent) {
          .text(`${rent.room.property.postalcode} ${rent.room.property.city}`)
          .moveDown()
          .moveDown();
+
+         const totalAmount = parseFloat(rent.rent_value) || 0;
+         const chargesAmount = parseFloat(rent.charges) || 0;
+         const rentAmount = totalAmount - chargesAmount;
 
       doc.text('DÉTAILS DU PAIEMENT', { underline: true })
          .moveDown()
@@ -182,7 +184,7 @@ async function generateReceipt(payment, rent) {
 
 async function verifyReceipt(filePath) {
   try {
-    const { data, error } = await storageService.getFileUrl(
+    const url = await storageService.getFileUrl(
       storageService.buckets.receipts,
       filePath
     );
@@ -192,9 +194,9 @@ async function verifyReceipt(filePath) {
     // Vérifier la signature ici
     // Cette partie dépendra de comment vous souhaitez implémenter la vérification
     
-    return {
+   return {
       isValid: true,
-      url: data.signedUrl
+      url: url
     };
   } catch (error) {
     console.error('Error verifying receipt:', error);

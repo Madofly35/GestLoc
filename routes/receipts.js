@@ -1,9 +1,8 @@
 const express = require('express');
 const router = express.Router();
-const path = require('path');
-const fs = require('fs');
 const { Receipt, Payment, Rent, Tenant, Room, Property } = require('../models/associations');
 const { generateReceipt } = require('../utils/receiptGenerator');
+const storageService = require('../services/storageService');
 
 // GET /api/tenants/:tenantId/receipts
 router.get('/tenants/:tenantId/receipts', async (req, res) => {
@@ -81,8 +80,7 @@ router.get('/tenants/:tenantId/receipts', async (req, res) => {
       amount: payment.amount
     })));
 
-    const formattedPayments = payments.map(payment => {
-      // Vérification de l'existence des données nécessaires
+    const formattedPayments = await Promise.all(payments.map(async payment => {
       if (!payment.rent?.tenant || !payment.rent?.room?.property) {
         console.warn('⚠️ Missing data for payment:', payment.id);
         return null;
@@ -90,8 +88,7 @@ router.get('/tenants/:tenantId/receipts', async (req, res) => {
 
       const rent = payment.rent;
       const paymentDate = new Date(payment.payment_date);
-      
-      return {
+      const fileData = {
         id: payment.id,
         amount: payment.amount,
         payment_date: payment.payment_date,
@@ -101,16 +98,28 @@ router.get('/tenants/:tenantId/receipts', async (req, res) => {
         property_name: rent.room.property.name,
         property_address: rent.room.property.address,
         room_number: rent.room.room_nb,
-        // Ajouter des informations sur la location
         rent_period: {
           start: rent.date_entrance,
           end: rent.end_date || 'En cours'
         }
       };
-    }).filter(Boolean); // Filtrer les paiements avec données manquantes
 
-    console.log('✅ Formatted payments:', formattedPayments);
-    res.json(formattedPayments);
+      // Ajouter l'URL Supabase si la quittance existe
+      if (payment.paymentReceipt) {
+        try {
+          const filePath = `tenant_${tenantId}/${paymentDate.getFullYear()}/${paymentDate.toLocaleDateString('fr-FR', { month: 'long' })}/receipt_${payment.id}.pdf`;
+          fileData.receipt_url = await storageService.getFileUrl(storageService.buckets.receipts, filePath);
+        } catch (error) {
+          console.warn('⚠️ Error getting receipt URL:', error);
+        }
+      }
+
+      return fileData;
+    }));
+
+    const validPayments = formattedPayments.filter(Boolean);
+    console.log('✅ Formatted payments:', validPayments);
+    res.json(validPayments);
 
   } catch (error) {
     console.error('❌ Error fetching receipts:', error);
@@ -120,7 +129,6 @@ router.get('/tenants/:tenantId/receipts', async (req, res) => {
     });
   }
 });
-
 
 // GET /api/receipts/:paymentId/download
 router.get('/receipts/:paymentId/download', async (req, res) => {
@@ -161,7 +169,7 @@ router.get('/receipts/:paymentId/download', async (req, res) => {
       return res.status(404).json({ message: "Paiement non trouvé" });
     }
 
-    if (!payment.rent || !payment.rent.tenant || !payment.rent.room || !payment.rent.room.property) {
+    if (!payment.rent?.tenant || !payment.rent?.room?.property) {
       return res.status(400).json({ message: "Données incomplètes pour générer la quittance" });
     }
 
@@ -173,58 +181,42 @@ router.get('/receipts/:paymentId/download', async (req, res) => {
       });
 
       let receipt = payment.paymentReceipt;
-      let filePath;
+      let fileUrl;
 
-      // Toujours utiliser generateReceipt du module receiptGenerator
       if (!receipt) {
-        console.log('🟦 No receipt found, generating new one with receiptGenerator...');
-        filePath = await generateReceipt(payment, payment.rent);
+        console.log('🟦 No receipt found, generating new one...');
+        const result = await generateReceipt(payment, payment.rent);
         
         receipt = await Receipt.create({
           payment_id: payment.id,
-          file_path: filePath,
+          storage_path: result.path,
+          storage_url: result.url,
           generated_at: new Date()
         });
 
+        fileUrl = result.url;
         console.log('✅ New receipt created:', receipt.id);
       } else {
-        filePath = receipt.file_path;
-      }
-
-      // Vérifier si le fichier existe physiquement
-      const absoluteFilePath = path.resolve(__dirname, '..', filePath);
-      if (!fs.existsSync(absoluteFilePath)) {
-        console.log('🟦 Physical file not found, regenerating with receiptGenerator...');
-        filePath = await generateReceipt(payment, payment.rent);
-        await receipt.update({ file_path: filePath });
-        
-        const newAbsoluteFilePath = path.resolve(__dirname, '..', filePath);
-        if (!fs.existsSync(newAbsoluteFilePath)) {
-          throw new Error('Impossible de générer la quittance');
+        try {
+          fileUrl = await storageService.getFileUrl(
+            storageService.buckets.receipts, 
+            receipt.storage_path
+          );
+        } catch (error) {
+          console.log('🟦 Error getting existing receipt, regenerating...');
+          const result = await generateReceipt(payment, payment.rent);
+          await receipt.update({ 
+            storage_path: result.path,
+            storage_url: result.url 
+          });
+          fileUrl = result.url;
         }
       }
 
       // Mettre à jour la date de téléchargement
       await receipt.update({ downloaded_at: new Date() });
 
-      // Créer le nom du fichier pour le téléchargement
-      const date = new Date(payment.payment_date);
-      const month = date.toLocaleDateString('fr-FR', { month: 'long' });
-      const year = date.getFullYear();
-      const fileName = `quittance_${month}_${year}_${payment.id}.pdf`;
-
-      console.log('🟦 Sending file:', {
-        path: absoluteFilePath,
-        filename: fileName
-      });
-
-      // Envoyer le fichier
-      res.download(absoluteFilePath, fileName, (err) => {
-        if (err) {
-          console.error('🔴 Error sending file:', err);
-          throw new Error('Erreur lors de l\'envoi du fichier');
-        }
-      });
+      res.json({ url: fileUrl });
 
     } catch (genError) {
       console.error('🔴 Error generating/sending receipt:', genError);
@@ -242,6 +234,5 @@ router.get('/receipts/:paymentId/download', async (req, res) => {
     });
   }
 });
-
 
 module.exports = router;
