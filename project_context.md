@@ -19,6 +19,8 @@ const rentsRoutes = require('./routes/rents');
 const paymentsRoutes = require('./routes/payments');
 const receiptsRoutes = require('./routes/receipts');
 const { resetSequence } = require('./utils/dbUtils');
+const verificationRoutes = require('./routes/verification');
+const documentsRoutes = require('./routes/documents');
 
 async function initializeDatabase() {
   try {
@@ -51,6 +53,8 @@ app.use(cors({
   origin: [
     "https://gest-loc-frontend.vercel.app",
     "https://gest-loc-frontend-gvdsg7woa-madofly35s-projects.vercel.app",
+    'https://gest-loc-frontend-1jvdf9yy9-madofly35s-projects.vercel.app',
+    /\.vercel\.app$/ // Pour accepter tous les sous-domaines Vercel
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
@@ -60,25 +64,6 @@ app.use(cors({
 // Middleware pour parser le JSON
 app.use(express.json());
 
-// Initialisation de la base de données
-async function initializeDatabase() {
-  try {
-    // Test de la connexion
-    await sequelize.authenticate();
-    console.log('✅ Connexion à la base de données établie avec succès.');
-
-    // Configuration des associations
-    setupAssociations();
-    console.log('✅ Associations des modèles configurées.');
-
-    // Synchronisation des modèles avec la base de données
-    await sequelize.sync();
-    console.log('✅ Modèles synchronisés avec la base de données.');
-  } catch (error) {
-    console.error('❌ Erreur lors de l\'initialisation de la base de données:', error);
-    process.exit(1); // Arrêter le serveur en cas d'erreur critique
-  }
-}
 
 // Routes
 app.use('/api/properties', propertiesRoutes);
@@ -87,6 +72,10 @@ app.use('/api/tenants', tenantsRoutes);
 app.use('/api/rents', rentsRoutes);
 app.use('/api/payments', paymentsRoutes);
 app.use('/api', receiptsRoutes);
+app.use('/api', verificationRoutes);
+app.use('/api', documentsRoutes);
+app.options('*', cors());
+
 
 // Ajouter après vos autres routes
 app.get('/api/test', async (req, res) => {
@@ -186,7 +175,7 @@ const sequelize = new Sequelize({
     evict: 1000
   },
   retry: {
-    max: 3,
+    max: 0,
     backoffBase: 1000,
     backoffExponent: 1.5,
   },
@@ -249,6 +238,69 @@ module.exports = {
 ### ⚙️ package.json
 ```
 [Fichier de configuration du projet: package.json]
+```
+
+
+### 📄 models\Document.js
+```
+// backend/models/Document.js
+
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config');
+
+const Document = sequelize.define('Document', {
+  id: {
+    type: DataTypes.INTEGER,
+    primaryKey: true,
+    autoIncrement: true
+  },
+  tenant_id: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    references: {
+      model: 'tenants',
+      key: 'id'
+    }
+  },
+  type: {
+    type: DataTypes.STRING,
+    allowNull: false,
+    validate: {
+      isIn: [['contracts', 'documents', 'tickets']]
+    }
+  },
+  name: {
+    type: DataTypes.STRING,
+    allowNull: false
+  },
+  storage_path: {
+    type: DataTypes.STRING,
+    allowNull: false
+  },
+  storage_url: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
+  mime_type: {
+    type: DataTypes.STRING,
+    allowNull: false
+  },
+  size: {
+    type: DataTypes.INTEGER,
+    allowNull: false
+  },
+  created_at: {
+    type: DataTypes.DATE,
+    defaultValue: DataTypes.NOW
+  }
+}, {
+  tableName: 'documents',
+  timestamps: false,
+  underscored: true
+});
+
+module.exports = Document;
+
 ```
 
 
@@ -371,7 +423,16 @@ const Receipt = sequelize.define('Receipt', {
   downloaded_at: {
     type: DataTypes.DATE,
     allowNull: true
+  },
+  storage_path: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
+  storage_url: {
+    type: DataTypes.STRING,
+    allowNull: true
   }
+
 }, {
   tableName: 'receipts',
   timestamps: false,
@@ -396,6 +457,14 @@ const Rent = sequelize.define('Rent', {
   id_tenant: {
     type: DataTypes.INTEGER,
     allowNull: false,
+    validate: {
+      isInt: {
+        msg: "L'ID du locataire doit être un nombre entier"
+      },
+      notNull: {
+        msg: "L'ID du locataire est requis"
+      }
+    },
     references: {
       model: 'tenants',
       key: 'id'
@@ -404,6 +473,14 @@ const Rent = sequelize.define('Rent', {
   id_room: {
     type: DataTypes.INTEGER,
     allowNull: false,
+    validate: {
+      isInt: {
+        msg: "L'ID de la chambre doit être un nombre entier"
+      },
+      notNull: {
+        msg: "L'ID de la chambre est requis"
+      }
+    },
     references: {
       model: 'rooms',
       key: 'id'
@@ -411,56 +488,89 @@ const Rent = sequelize.define('Rent', {
   },
   date_entrance: {
     type: DataTypes.DATEONLY,
-    allowNull: false
+    allowNull: false,
+    validate: {
+      isDate: {
+        msg: 'Date d\'entrée invalide'
+      },
+      notNull: {
+        msg: 'La date d\'entrée est requise'
+      }
+    }
   },
   rent_value: {
     type: DataTypes.DECIMAL(10, 2),
-    allowNull: false
+    allowNull: false,
+    validate: {
+      isDecimal: {
+        msg: 'Le montant du loyer doit être un nombre décimal'
+      },
+      min: {
+        args: [0],
+        msg: 'Le montant du loyer doit être positif'
+      },
+      notNull: {
+        msg: 'Le montant du loyer est requis'
+      }
+    }
   },
   charges: {
     type: DataTypes.DECIMAL(10, 2),
     allowNull: false,
-    defaultValue: 0
+    defaultValue: 0,
+    validate: {
+      isDecimal: {
+        msg: 'Le montant des charges doit être un nombre décimal'
+      },
+      min: {
+        args: [0],
+        msg: 'Le montant des charges doit être positif'
+      }
+    }
   },
   end_date: {
     type: DataTypes.DATEONLY,
-    allowNull: true
+    allowNull: true,
+    validate: {
+      isDate: {
+        msg: 'Date de fin invalide'
+      },
+      laterThanStartDate(value) {
+        if (value && value <= this.date_entrance) {
+          throw new Error('La date de fin doit être postérieure à la date d\'entrée');
+        }
+      }
+    }
   }
 }, {
   tableName: 'rents',
-  timestamps: false
+  timestamps: false,
+  validate: {
+    async checkOverlappingRents() {
+      const overlapping = await Rent.findOne({
+        where: {
+          id_room: this.id_room,
+          [Op.and]: [
+            { date_entrance: { [Op.lte]: this.end_date || '9999-12-31' } },
+            { 
+              [Op.or]: [
+                { end_date: null },
+                { end_date: { [Op.gte]: this.date_entrance } }
+              ]
+            }
+          ],
+          id: { [Op.ne]: this.id } // Exclure la location actuelle en cas de mise à jour
+        }
+      });
+
+      if (overlapping) {
+        throw new Error('Cette période chevauche une location existante');
+      }
+    }
+  }
 });
 
-// Fonction simplifiée pour réinitialiser la séquence
-async function resetRentSequence() {
-  try {
-    await sequelize.query(`
-      SELECT setval('rents_id_seq', (SELECT COALESCE(MAX(id), 0) + 1 FROM rents), false);
-    `);
-    console.log('✅ Séquence rents_id_seq réinitialisée avec succès');
-  } catch (error) {
-    console.error('🔴 Erreur lors de la réinitialisation de la séquence:', error);
-    throw error;
-  }
-}
-
-// Fonction d'initialisation
-async function initializeRent() {
-  try {
-    await Rent.sync();
-    await resetRentSequence();
-    console.log('✅ Modèle Rent initialisé avec succès');
-  } catch (error) {
-    console.error('🔴 Erreur lors de l\'initialisation du modèle Rent:', error);
-    throw error;
-  }
-}
-
-module.exports = { 
-  Rent, 
-  initializeRent,
-  resetRentSequence 
-};
+module.exports = { Rent };
 ```
 
 
@@ -606,8 +716,8 @@ module.exports = Tenant;
 
 ### 📄 models\associations.js
 ```
-
 ```
+
 const Property = require('./Property');
 const Room = require('./Room');
 const Tenant = require('./Tenant');
@@ -769,6 +879,216 @@ router.post('/', async (req, res) => {
 });
 
 module.exports = router;
+```
+
+
+### 📄 routes\documents.js
+```
+// backend/routes/documents.js
+
+const express = require('express');
+const router = express.Router();
+const storageService = require('../services/storageService');
+const { Receipt, Payment, Rent, Tenant } = require('../models/associations');
+const multer = require('multer');
+
+// Configuration de multer pour la gestion des fichiers
+const storage = multer.memoryStorage();
+const upload = multer({ 
+  storage,
+  limits: {
+    fileSize: 50 * 1024 * 1024 // 50MB max
+  }
+});
+
+// Route de téléchargement des quittances
+router.get('/receipts/:id/download', async (req, res) => {
+  try {
+    const receipt = await Receipt.findOne({
+      where: { id: req.params.id },
+      include: [{
+        model: Payment,
+        as: 'payment',
+        include: [{
+          model: Rent,
+          as: 'rent',
+          include: [{
+            model: Tenant,
+            as: 'tenant'
+          }]
+        }]
+      }]
+    });
+
+    if (!receipt) {
+      return res.status(404).json({ message: 'Quittance non trouvée' });
+    }
+
+    // Vérification des permissions
+    // Si l'utilisateur est locataire, vérifier que la quittance lui appartient
+    if (req.user.role === 'tenant' && 
+        receipt.payment.rent.tenant.id !== req.user.tenant_id) {
+      return res.status(403).json({ message: 'Accès non autorisé' });
+    }
+
+    // Générer une nouvelle URL signée (les anciennes expirent après 1h)
+    const signedUrl = await storageService.getFileUrl(
+      storageService.buckets.receipts,
+      receipt.storage_path
+    );
+
+    // Mettre à jour la date de téléchargement
+    await receipt.update({
+      downloaded_at: new Date()
+    });
+
+    res.json({ url: signedUrl });
+  } catch (error) {
+    console.error('Erreur téléchargement quittance:', error);
+    res.status(500).json({ 
+      message: 'Erreur lors du téléchargement',
+      error: error.message 
+    });
+  }
+});
+
+// Route générique pour télécharger un document
+router.get('/documents/:type/:id', async (req, res) => {
+  const { type, id } = req.params;
+  const validTypes = ['contracts', 'documents', 'tickets'];
+  
+  try {
+    if (!validTypes.includes(type)) {
+      return res.status(400).json({ message: 'Type de document invalide' });
+    }
+
+    // Récupérer les métadonnées du document depuis la base de données
+    // (à adapter selon votre modèle de données)
+    const document = await Document.findOne({
+      where: { id },
+      include: [{
+        model: Tenant,
+        as: 'tenant'
+      }]
+    });
+
+    if (!document) {
+      return res.status(404).json({ message: 'Document non trouvé' });
+    }
+
+    // Vérification des permissions
+    if (req.user.role === 'tenant' && 
+        document.tenant.id !== req.user.tenant_id) {
+      return res.status(403).json({ message: 'Accès non autorisé' });
+    }
+
+    // Générer une URL signée
+    const signedUrl = await storageService.getFileUrl(
+      storageService.buckets[type],
+      document.storage_path
+    );
+
+    res.json({ url: signedUrl });
+  } catch (error) {
+    console.error('Erreur téléchargement document:', error);
+    res.status(500).json({ 
+      message: 'Erreur lors du téléchargement',
+      error: error.message 
+    });
+  }
+});
+
+// Route pour l'upload de documents
+router.post('/documents/:type', upload.single('file'), async (req, res) => {
+  const { type } = req.params;
+  const validTypes = ['contracts', 'documents', 'tickets'];
+
+  try {
+    if (!validTypes.includes(type)) {
+      return res.status(400).json({ message: 'Type de document invalide' });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ message: 'Aucun fichier fourni' });
+    }
+
+    // Upload vers Supabase
+    const storagePath = `${req.user.tenant_id}/${Date.now()}_${req.file.originalname}`;
+    const storageFile = await storageService.uploadFile(
+      req.file,
+      storageService.buckets[type],
+      storagePath
+    );
+
+    // Sauvegarder les métadonnées dans la base de données
+    const document = await Document.create({
+      tenant_id: req.user.tenant_id,
+      type,
+      name: req.file.originalname,
+      storage_path: storageFile.path,
+      storage_url: storageFile.url,
+      mime_type: req.file.mimetype,
+      size: req.file.size
+    });
+
+    res.status(201).json(document);
+  } catch (error) {
+    console.error('Erreur upload document:', error);
+    res.status(500).json({ 
+      message: 'Erreur lors de l\'upload',
+      error: error.message 
+    });
+  }
+});
+
+// Route pour supprimer un document
+router.delete('/documents/:type/:id', async (req, res) => {
+  const { type, id } = req.params;
+  const validTypes = ['contracts', 'documents', 'tickets'];
+
+  try {
+    if (!validTypes.includes(type)) {
+      return res.status(400).json({ message: 'Type de document invalide' });
+    }
+
+    const document = await Document.findOne({
+      where: { id },
+      include: [{
+        model: Tenant,
+        as: 'tenant'
+      }]
+    });
+
+    if (!document) {
+      return res.status(404).json({ message: 'Document non trouvé' });
+    }
+
+    // Vérification des permissions (seul le propriétaire peut supprimer)
+    if (req.user.role !== 'owner') {
+      return res.status(403).json({ message: 'Action non autorisée' });
+    }
+
+    // Supprimer de Supabase
+    await storageService.deleteFile(
+      storageService.buckets[type],
+      document.storage_path
+    );
+
+    // Supprimer de la base de données
+    await document.destroy();
+
+    res.json({ message: 'Document supprimé avec succès' });
+  } catch (error) {
+    console.error('Erreur suppression document:', error);
+    res.status(500).json({ 
+      message: 'Erreur lors de la suppression',
+      error: error.message 
+    });
+  }
+});
+
+module.exports = router;
+
 ```
 
 
@@ -1333,58 +1653,61 @@ const {sequelize} = require('../config');
 
 // Créer une nouvelle location
 router.post('/', async (req, res) => {
-  const transaction = await sequelize.transaction();
+  let transaction;
   
   try {
-    // Vérifier si la chambre n'est pas déjà louée sur cette période
-    const overlappingRent = await Rent.findOne({
-      where: {
-        id_room: req.body.id_room,
-        [Op.or]: [
-          {
-            [Op.and]: {
-              date_entrance: { [Op.lte]: req.body.date_entrance },
-              [Op.or]: [
-                { end_date: { [Op.gte]: req.body.date_entrance } },
-                { end_date: null }
-              ]
-            }
-          },
-          {
-            [Op.and]: {
-              date_entrance: { [Op.lte]: req.body.end_date || '9999-12-31' },
-              [Op.or]: [
-                { end_date: { [Op.gte]: req.body.end_date || '9999-12-31' } },
-                { end_date: null }
-              ]
-            }
-          }
-        ]
-      },
-      transaction
-    });
+    console.log('Données reçues:', req.body);
 
-    if (overlappingRent) {
-      await transaction.rollback();
-      return res.status(400).json({ 
-        message: 'Cette chambre est déjà louée pendant cette période' 
+    // Validation préliminaire des données
+    if (!req.body.id_tenant || !req.body.id_room || !req.body.date_entrance || !req.body.rent_value) {
+      return res.status(400).json({
+        message: 'Données manquantes',
+        required: ['id_tenant', 'id_room', 'date_entrance', 'rent_value'],
+        received: req.body
       });
     }
 
-    // Formater les données avant création
+    // Formatage des données
     const rentData = {
       id_tenant: parseInt(req.body.id_tenant),
       id_room: parseInt(req.body.id_room),
-      date_entrance: req.body.date_entrance,
+      date_entrance: new Date(req.body.date_entrance).toISOString().split('T')[0],
       rent_value: parseFloat(req.body.rent_value),
       charges: parseFloat(req.body.charges || 0),
-      ...(req.body.end_date && { end_date: req.body.end_date })
+      end_date: req.body.end_date ? 
+        new Date(req.body.end_date).toISOString().split('T')[0] : null
     };
 
-    const rent = await Rent.create(rentData, { transaction });
+    console.log('Données formatées:', rentData);
+
+    // Début de la transaction
+    transaction = await sequelize.transaction();
+
+    // Vérification de l'existence du locataire et de la chambre
+    const [tenant, room] = await Promise.all([
+      Tenant.findByPk(rentData.id_tenant, { transaction }),
+      Room.findByPk(rentData.id_room, { transaction })
+    ]);
+
+    if (!tenant || !room) {
+      await transaction.rollback();
+      return res.status(400).json({
+        message: !tenant ? 'Locataire non trouvé' : 'Chambre non trouvée',
+        id_tenant: rentData.id_tenant,
+        id_room: rentData.id_room
+      });
+    }
+
+    // Création de la location
+    const rent = await Rent.create(rentData, {
+      transaction,
+      validate: true
+    });
+
+    // Commit de la transaction
     await transaction.commit();
-    
-    // Récupérer la location créée avec ses relations
+
+    // Récupération des données complètes
     const newRent = await Rent.findByPk(rent.id, {
       include: [
         {
@@ -1401,12 +1724,30 @@ router.post('/', async (req, res) => {
     });
 
     res.status(201).json(newRent);
+
   } catch (error) {
-    await transaction.rollback();
-    console.error('Erreur création location:', error);
-    res.status(500).json({ 
+    if (transaction) await transaction.rollback();
+
+    // Gestion spécifique des erreurs de validation
+    if (error.name === 'SequelizeValidationError') {
+      return res.status(400).json({
+        message: 'Erreur de validation',
+        errors: error.errors.map(err => ({
+          field: err.path,
+          message: err.message
+        }))
+      });
+    }
+
+    console.error('Erreur détaillée:', {
+      message: error.message,
+      name: error.name,
+      errors: error.errors
+    });
+
+    res.status(500).json({
       message: 'Erreur lors de la création de la location',
-      error: error.message 
+      error: error.message
     });
   }
 });
@@ -1761,51 +2102,112 @@ module.exports = router;
 ```
 
 
-### 📄 scripts\createCertificate.js
+### 📄 routes\verification.js
 ```
-const { execSync } = require('child_process');
-const path = require('path');
+// backend/routes/verification.js
+const express = require('express');
+const router = express.Router();
+const { verifyReceipt } = require('../utils/receiptGenerator');
+
+router.get('/verify/:hash', async (req, res) => {
+  try {
+    const receipt = await verifyReceipt(req.params.hash);
+    if (!receipt) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Document non trouvé'
+      });
+    }
+
+    res.json({
+      status: 'success',
+      data: {
+        isValid: true,
+        documentInfo: {
+          type: 'Quittance de loyer',
+          date: receipt.generated_at,
+          tenant: `${receipt.Payment.Rent.Tenant.first_name} ${receipt.Payment.Rent.Tenant.last_name}`,
+          property: receipt.Payment.Rent.Room.Property.name,
+          amount: receipt.Payment.amount
+        }
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      message: error.message
+    });
+  }
+});
+
+module.exports = router;
+
+```
+
+
+### 📄 scripts\certificateGenerator.js
+```
+const forge = require('node-forge');
 const fs = require('fs');
+const path = require('path');
 
-// Créer le dossier certificates s'il n'existe pas
-const certDir = path.join(__dirname, '..', 'certificates');
-if (!fs.existsSync(certDir)) {
-  fs.mkdirSync(certDir);
-}
+function generateCertificate() {
+  const certDir = path.join(__dirname, '..', 'certificates');
+  if (!fs.existsSync(certDir)) {
+    fs.mkdirSync(certDir);
+  }
 
-// Générer un certificat auto-signé avec OpenSSL
-const certPath = path.join(certDir, 'signature');
-const config = {
-  country: 'FR',
-  state: 'Rhone',
-  locality: 'AIX EN PROVENCE',
-  organization: 'Pierre PARDOUX',
-  commonName: 'Pierre PARDOUX Signing Certificate',
-  emailAddress: 'p.pardoux@gmail.com.com'
-};
+  // Générer une paire de clés
+  const keys = forge.pki.rsa.generateKeyPair(2048);
+  
+  // Créer le certificat
+  const cert = forge.pki.createCertificate();
+  cert.publicKey = keys.publicKey;
+  cert.serialNumber = '01';
+  cert.validity.notBefore = new Date();
+  cert.validity.notAfter = new Date();
+  cert.validity.notAfter.setFullYear(cert.validity.notBefore.getFullYear() + 1);
 
-try {
-  // Générer la clé privée
-  execSync(`openssl genrsa -out ${certPath}.key 2048`);
+  const attrs = [{
+    name: 'commonName',
+    value: 'Pierre PARDOUX'
+  }, {
+    name: 'countryName',
+    value: 'FR'
+  }, {
+    shortName: 'ST',
+    value: 'Rhone'
+  }, {
+    name: 'localityName',
+    value: 'AIX EN PROVENCE'
+  }, {
+    name: 'organizationName',
+    value: 'Pierre PARDOUX'
+  }, {
+    name: 'emailAddress',
+    value: 'p.pardoux@gmail.com'
+  }];
 
-  // Générer la demande de certificat
-  execSync(`openssl req -new -key ${certPath}.key -out ${certPath}.csr \
-    -subj "/C=${config.country}/ST=${config.state}/L=${config.locality}/O=${config.organization}/CN=${config.commonName}/emailAddress=${config.emailAddress}"`);
+  cert.setSubject(attrs);
+  cert.setIssuer(attrs);
+  cert.sign(keys.privateKey);
 
-  // Générer le certificat auto-signé
-  execSync(`openssl x509 -req -days 365 -in ${certPath}.csr -signkey ${certPath}.key -out ${certPath}.crt`);
+  // Exporter les fichiers
+  const p12Asn1 = forge.pkcs12.toPkcs12Asn1(
+    keys.privateKey, 
+    cert, 
+    'BBnn,,1122',
+    { generateLocalKeyId: true }
+  );
 
-  // Convertir en format PKCS#12
-  execSync(`openssl pkcs12 -export -out ${certPath}.p12 \
-    -inkey ${certPath}.key \
-    -in ${certPath}.crt \
-    -passout pass:${certPassword}`);
-
+  const p12Der = forge.asn1.toDer(p12Asn1).getBytes();
+  const p12Path = path.join(certDir, 'signature.p12');
+  
+  fs.writeFileSync(p12Path, Buffer.from(p12Der, 'binary'));
   console.log('✅ Certificate generated successfully');
-
-} catch (error) {
-  console.error('🔴 Error generating certificate:', error);
 }
+
+generateCertificate();
 
 ```
 
@@ -1921,10 +2323,95 @@ synchronizeReceipts()
 ```
 
 
+### 📄 services\storageService.js
+```
+// backend/services/storageService.js
+
+const { supabase } = require('../config');
+
+class StorageService {
+  constructor() {
+    // Noms des buckets
+    this.buckets = {
+      receipts: 'receipts',
+      contracts: 'contracts',
+      documents: 'documents',
+      tickets: 'maintenance-tickets'
+    };
+  }
+
+  async initializeBuckets() {
+    for (const bucketName of Object.values(this.buckets)) {
+      const { error } = await supabase.storage.createBucket(bucketName, {
+        public: false, // Bucket privé
+        fileSizeLimit: 52428800 // 50MB max
+      });
+      
+      if (error && !error.message.includes('already exists')) {
+        throw error;
+      }
+    }
+  }
+
+  async uploadFile(file, bucketName, path = '') {
+    const fileName = `${Date.now()}_${file.originalname}`;
+    const filePath = path ? `${path}/${fileName}` : fileName;
+
+    const { data, error } = await supabase.storage
+      .from(bucketName)
+      .upload(filePath, file.buffer, {
+        contentType: file.mimetype,
+        upsert: false
+      });
+
+    if (error) throw error;
+
+    // Créer URL signée valide 1 heure
+    const { data: { signedUrl } } = await supabase.storage
+      .from(bucketName)
+      .createSignedUrl(filePath, 3600);
+
+    return {
+      path: data.path,
+      url: signedUrl
+    };
+  }
+
+  async deleteFile(bucketName, filePath) {
+    const { error } = await supabase.storage
+      .from(bucketName)
+      .remove([filePath]);
+
+    if (error) throw error;
+    return true;
+  }
+
+  async getFileUrl(bucketName, filePath) {
+    const { data: { signedUrl }, error } = await supabase.storage
+      .from(bucketName)
+      .createSignedUrl(filePath, 3600);
+
+    if (error) throw error;
+    return signedUrl;
+  }
+
+  // Gestion des dossiers pour les quittances
+  getReceiptPath(date, tenantId) {
+    const year = date.getFullYear();
+    const month = date.toLocaleString('fr-FR', { month: 'long' });
+    return `${year}/${month}/tenant_${tenantId}`;
+  }
+}
+
+module.exports = new StorageService();
+
+```
+
+
 ### 📄 utils\dbUtils.js
 ```
 // backend/utils/dbUtils.js
-const sequelize = require('../config');
+const {sequelize} = require('../config');
 
 async function resetSequence(tableName) {
   try {
@@ -1951,88 +2438,74 @@ module.exports = {
 const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
-const { SignPdf } = require('node-signpdf');
-const signer = new SignPdf();
+const forge = require('node-forge');
 
-// Configuration du certificat
-const CERTIFICATE_CONFIG = {
-  p12Path: path.join(__dirname, '..', 'certificates', 'signature.p12'), // Chemin vers votre certificat P12
-  certPassword: 'BBnn,,1122' // Mot de passe de votre certificat
+// Configuration du bailleur
+const OWNER_INFO = {
+  name: 'PARDOUX Pierre',
+  company: '',
+  address: '30 avenue Esprit Brondino',
+  postalCode: '13290',
+  city: 'AIX EN PROVENCE'
 };
-
-async function signPDF(inputPath) {
-  try {
-    // Lire le PDF non signé
-    const pdfBuffer = fs.readFileSync(inputPath);
-    
-    // Lire le certificat P12
-    const p12Buffer = fs.readFileSync(CERTIFICATE_CONFIG.p12Path);
-
-    // Signer le PDF
-    const signedPdf = await signer.sign(pdfBuffer, p12Buffer, {
-      passphrase: CERTIFICATE_CONFIG.certPassword,
-      reason: 'Quittance de loyer',
-      location: OWNER_INFO.city,
-      signerName: OWNER_INFO.company,
-      annotationAppearanceOptions: {
-        signatureCoordinates: { left: 50, bottom: 100, right: 200, top: 150 },
-        signatureDetails: [
-          `Signé numériquement par: ${OWNER_INFO.company}`,
-          `Date: ${new Date().toLocaleDateString('fr-FR')}`,
-          'Raison: Quittance de loyer'
-        ]
-      }
-    });
-
-    // Écrire le PDF signé
-    fs.writeFileSync(inputPath, signedPdf);
-    console.log('✅ PDF successfully signed');
-
-  } catch (error) {
-    console.error('🔴 Error signing PDF:', error);
-    throw error;
-  }
-}
-
 
 function ensureDirectoryExistsSync(directoryPath) {
   if (!fs.existsSync(directoryPath)) {
     fs.mkdirSync(directoryPath, { recursive: true });
-    console.log('✅ Directory created:', directoryPath);
   }
 }
 
-// Configuration du bailleur
-const OWNER_INFO = {
-  name: 'PARDOUX Pierre',           // Remplacez par le nom réel du bailleur
-  company: '',          // Remplacez par le nom de la société
-  address: '30 avenue Esprit Brondino',   // Remplacez par l'adresse réelle
-  postalCode: '13290',         // Remplacez par le code postal réel
-  city: 'AIX EN PROVENCE'         // Remplacez par la ville réelle
-};
+function addDigitalSignature(pdfBuffer) {
+  try {
+    // Charger le certificat P12
+    const p12Path = path.join(__dirname, '..', 'certificates', 'signature.p12');
+    if (!fs.existsSync(p12Path)) {
+      console.warn('⚠️ Certificate not found, skipping signature');
+      return pdfBuffer;
+    }
+
+    const p12Der = fs.readFileSync(p12Path, 'binary');
+    const p12Asn1 = forge.asn1.fromDer(p12Der);
+    const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, 'BBnn,,1122');
+
+    // Créer la signature
+    const md = forge.md.sha256.create();
+    md.update(pdfBuffer.toString('binary'));
+
+    // Obtenir la clé privée
+    const bags = p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag });
+    const keyBag = bags[forge.pki.oids.pkcs8ShroudedKeyBag][0];
+    const privateKey = keyBag.key;
+
+    // Signer
+    const signature = privateKey.sign(md);
+
+    // Ajouter les métadonnées de signature
+    const signedPdfBuffer = Buffer.concat([
+      pdfBuffer,
+      Buffer.from('\n%Signed by: ' + OWNER_INFO.name + '\n'),
+      Buffer.from('%Signature date: ' + new Date().toISOString() + '\n'),
+      Buffer.from(signature)
+    ]);
+
+    return signedPdfBuffer;
+  } catch (error) {
+    console.error('⚠️ Signature error:', error);
+    return pdfBuffer;
+  }
+}
 
 async function generateReceipt(payment, rent) {
   return new Promise((resolve, reject) => {
     try {
-      console.log('🟦 Starting receipt generation for payment:', payment.id);
-      
-      // Vérification des données requises
       if (!payment || !rent || !rent.tenant || !rent.room || !rent.room.property) {
         throw new Error('Données manquantes pour la génération de la quittance');
       }
 
-      // Convertir tous les montants en nombres et calculs
       const totalAmount = parseFloat(rent.rent_value) || 0;
       const chargesAmount = parseFloat(rent.charges) || 0;
-      const rentAmount = totalAmount - chargesAmount; // Loyer hors charges
+      const rentAmount = totalAmount - chargesAmount;
 
-      console.log('🟦 Amounts calculated:', {
-        total: totalAmount,
-        charges: chargesAmount,
-        rentOnly: rentAmount
-      });
-
-      // Création des chemins avec vérification
       const storageDir = path.resolve(__dirname, '..', 'storage');
       const receiptsDir = path.join(storageDir, 'receipts');
       const date = new Date(payment.payment_date);
@@ -2041,10 +2514,7 @@ async function generateReceipt(payment, rent) {
       const yearDir = path.join(receiptsDir, year.toString());
       const monthDir = path.join(yearDir, month);
 
-      // Création des répertoires si nécessaire
-      [storageDir, receiptsDir, yearDir, monthDir].forEach(dir => {
-        ensureDirectoryExistsSync(dir);
-      });
+      [storageDir, receiptsDir, yearDir, monthDir].forEach(ensureDirectoryExistsSync);
 
       const filename = `quittance_${payment.id}.pdf`;
       const absoluteFilePath = path.join(monthDir, filename);
@@ -2052,30 +2522,26 @@ async function generateReceipt(payment, rent) {
         .split(path.sep)
         .join('/');
 
-      console.log('🟦 Generating receipt at:', absoluteFilePath);
-
       const doc = new PDFDocument();
-      const writeStream = fs.createWriteStream(absoluteFilePath);
-
-      writeStream.on('error', (error) => {
-        console.error('🔴 Write Stream Error:', error);
-        reject(error);
+      const buffers = [];
+      doc.on('data', buffers.push.bind(buffers));
+      doc.on('end', () => {
+        const pdfBuffer = Buffer.concat(buffers);
+        const signedPdfBuffer = addDigitalSignature(pdfBuffer);
+        fs.writeFileSync(absoluteFilePath, signedPdfBuffer);
+        resolve(relativeFilePath);
       });
 
-      doc.pipe(writeStream);
-
-      // En-tête
+      // PDF Content
       doc.fontSize(20)
          .text('QUITTANCE DE LOYER', { align: 'center' })
          .moveDown();
 
-      // Mois et année
       doc.fontSize(14)
          .text(`${month} ${year}`, { align: 'center' })
          .moveDown()
          .moveDown();
 
-      // Informations du bailleur
       doc.fontSize(12)
          .text(OWNER_INFO.name, { underline: true })
          .moveDown()
@@ -2085,7 +2551,6 @@ async function generateReceipt(payment, rent) {
          .moveDown()
          .moveDown();
 
-      // Informations du locataire
       doc.text('LOCATAIRE :', { underline: true })
          .moveDown()
          .text(`${rent.tenant.first_name} ${rent.tenant.last_name}`)
@@ -2095,7 +2560,6 @@ async function generateReceipt(payment, rent) {
          .moveDown()
          .moveDown();
 
-      // Détails du paiement
       doc.text('DÉTAILS DU PAIEMENT', { underline: true })
          .moveDown()
          .text(`Loyer : ${rentAmount.toFixed(2)} €`)
@@ -2104,9 +2568,8 @@ async function generateReceipt(payment, rent) {
          .moveDown()
          .moveDown();
 
-      // Texte de quittance
       doc.text(
-        `Je soussigné ${OWNER_INFO.company}, bailleur, donne quittance à ${rent.tenant.first_name} ${rent.tenant.last_name} ` +
+        `Je soussigné ${OWNER_INFO.name}, bailleur, donne quittance à ${rent.tenant.first_name} ${rent.tenant.last_name} ` +
         `pour la somme de ${totalAmount.toFixed(2)} euros, ` +
         `au titre du loyer et des charges du logement désigné ci-dessus ` +
         `pour la période du 1er au dernier jour du mois de ${month} ${year}.`
@@ -2114,7 +2577,6 @@ async function generateReceipt(payment, rent) {
       .moveDown()
       .moveDown();
 
-      // Date et signature
       const currentDate = new Date().toLocaleDateString('fr-FR');
       doc.text(`Fait à ${OWNER_INFO.city}, le ${currentDate}`)
          .moveDown()
@@ -2123,36 +2585,15 @@ async function generateReceipt(payment, rent) {
          .moveDown()
          .moveDown();
 
-      // Pied de page
       doc.fontSize(8)
          .text(
            'Cette quittance annule tous les reçus qui auraient pu être établis précédemment en cas de paiement partiel du montant ci-dessus.',
            { align: 'center' }
          );
 
-      //  on attend la signature
-      writeStream.on('finish', async () => {
-        try {
-          // Signer le PDF après sa génération
-          await signPDF(absoluteFilePath);
-          console.log('✅ Receipt generated and signed successfully:', relativeFilePath);
-          resolve(relativeFilePath);
-        } catch (signError) {
-          console.error('🔴 Error during signing:', signError);
-          reject(signError);
-        }
-      });
-
-      writeStream.on('error', (error) => {
-        console.error('🔴 Write Stream Error:', error);
-        reject(error);
-      });
-
-      // Finalisation du document
       doc.end();
 
     } catch (error) {
-      console.error('🔴 Error in generateReceipt:', error);
       reject(error);
     }
   });
@@ -2170,6 +2611,7 @@ module.exports = {
   ⚙️ package.json
   📁 certificates/
   📁 models/
+    📄 Document.js
     📄 Payment.js
     📄 Property.js
     📄 Receipt.js
@@ -2180,14 +2622,18 @@ module.exports = {
   📁 routes/
     📄 Properties.js
     📄 applications.js
+    📄 documents.js
     📄 payments.js
     📄 receipts.js
     📄 rents.js
     📄 rooms.js
     📄 tenants.js
+    📄 verification.js
   📁 scripts/
-    📄 createCertificate.js
+    📄 certificateGenerator.js
     📄 syncReceipts.js
+  📁 services/
+    📄 storageService.js
   📁 storage/
     📁 receipts/
       📁 2024/

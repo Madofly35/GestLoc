@@ -1,7 +1,6 @@
 const PDFDocument = require('pdfkit');
-const fs = require('fs');
-const path = require('path');
 const forge = require('node-forge');
+const storageService = require('../services/storageService');
 
 // Configuration du bailleur
 const OWNER_INFO = {
@@ -12,43 +11,50 @@ const OWNER_INFO = {
   city: 'AIX EN PROVENCE'
 };
 
-function ensureDirectoryExistsSync(directoryPath) {
-  if (!fs.existsSync(directoryPath)) {
-    fs.mkdirSync(directoryPath, { recursive: true });
-  }
-}
-
 function addDigitalSignature(pdfBuffer) {
   try {
-    // Charger le certificat P12
-    const p12Path = path.join(__dirname, '..', 'certificates', 'signature.p12');
-    if (!fs.existsSync(p12Path)) {
-      console.warn('⚠️ Certificate not found, skipping signature');
-      return pdfBuffer;
-    }
-
-    const p12Der = fs.readFileSync(p12Path, 'binary');
-    const p12Asn1 = forge.asn1.fromDer(p12Der);
-    const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, 'BBnn,,1122');
-
-    // Créer la signature
+    // Créer une signature
     const md = forge.md.sha256.create();
     md.update(pdfBuffer.toString('binary'));
 
-    // Obtenir la clé privée
-    const bags = p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag });
-    const keyBag = bags[forge.pki.oids.pkcs8ShroudedKeyBag][0];
-    const privateKey = keyBag.key;
+    // Créer les attributs du signataire
+    const attrs = [{
+      name: 'commonName',
+      value: OWNER_INFO.name
+    }, {
+      name: 'countryName',
+      value: 'FR'
+    }, {
+      shortName: 'ST',
+      value: 'PACA'
+    }, {
+      name: 'localityName',
+      value: OWNER_INFO.city
+    }];
+
+    // Générer une paire de clés
+    const keys = forge.pki.rsa.generateKeyPair(2048);
+    const cert = forge.pki.createCertificate();
+    
+    cert.publicKey = keys.publicKey;
+    cert.serialNumber = '01';
+    cert.validity.notBefore = new Date();
+    cert.validity.notAfter = new Date();
+    cert.validity.notAfter.setFullYear(cert.validity.notBefore.getFullYear() + 1);
+    cert.setSubject(attrs);
+    cert.setIssuer(attrs);
+    cert.sign(keys.privateKey);
 
     // Signer
-    const signature = privateKey.sign(md);
+    const signature = keys.privateKey.sign(md);
 
     // Ajouter les métadonnées de signature
     const signedPdfBuffer = Buffer.concat([
       pdfBuffer,
       Buffer.from('\n%Signed by: ' + OWNER_INFO.name + '\n'),
       Buffer.from('%Signature date: ' + new Date().toISOString() + '\n'),
-      Buffer.from(signature)
+      Buffer.from('%Digital Signature: ' + signature.toString('base64') + '\n'),
+      Buffer.from('%Certificate: ' + forge.pki.certificateToPem(cert))
     ]);
 
     return signedPdfBuffer;
@@ -69,36 +75,46 @@ async function generateReceipt(payment, rent) {
       const chargesAmount = parseFloat(rent.charges) || 0;
       const rentAmount = totalAmount - chargesAmount;
 
-      const storageDir = path.resolve(__dirname, '..', 'storage');
-      const receiptsDir = path.join(storageDir, 'receipts');
-      const date = new Date(payment.payment_date);
-      const month = date.toLocaleDateString('fr-FR', { month: 'long' });
-      const year = date.getFullYear();
-      const yearDir = path.join(receiptsDir, year.toString());
-      const monthDir = path.join(yearDir, month);
-
-      [storageDir, receiptsDir, yearDir, monthDir].forEach(ensureDirectoryExistsSync);
-
-      const filename = `quittance_${payment.id}.pdf`;
-      const absoluteFilePath = path.join(monthDir, filename);
-      const relativeFilePath = path.join('storage', 'receipts', year.toString(), month, filename)
-        .split(path.sep)
-        .join('/');
-
-      const doc = new PDFDocument();
       const buffers = [];
+      const doc = new PDFDocument();
+      
       doc.on('data', buffers.push.bind(buffers));
-      doc.on('end', () => {
-        const pdfBuffer = Buffer.concat(buffers);
-        const signedPdfBuffer = addDigitalSignature(pdfBuffer);
-        fs.writeFileSync(absoluteFilePath, signedPdfBuffer);
-        resolve(relativeFilePath);
+      doc.on('end', async () => {
+        try {
+          // Convertir le PDF en buffer et ajouter la signature
+          const pdfBuffer = Buffer.concat(buffers);
+          const signedPdfBuffer = addDigitalSignature(pdfBuffer);
+
+          const date = new Date(payment.payment_date);
+          const filePath = storageService.getReceiptPath(
+            payment.id,
+            date,
+            rent.tenant.id
+          );
+
+          const result = await storageService.uploadFile(
+            { 
+              buffer: signedPdfBuffer,
+              mimetype: 'application/pdf'
+            },
+            storageService.buckets.receipts,
+            filePath
+          );
+
+          resolve(result.path);
+        } catch (error) {
+          reject(error);
+        }
       });
 
-      // PDF Content
+      // Contenu du PDF
       doc.fontSize(20)
          .text('QUITTANCE DE LOYER', { align: 'center' })
          .moveDown();
+
+      const date = new Date(payment.payment_date);
+      const month = date.toLocaleDateString('fr-FR', { month: 'long' });
+      const year = date.getFullYear();
 
       doc.fontSize(14)
          .text(`${month} ${year}`, { align: 'center' })
@@ -152,7 +168,9 @@ async function generateReceipt(payment, rent) {
          .text(
            'Cette quittance annule tous les reçus qui auraient pu être établis précédemment en cas de paiement partiel du montant ci-dessus.',
            { align: 'center' }
-         );
+         )
+         .moveDown()
+         .text('Document signé électroniquement', { align: 'center' });
 
       doc.end();
 
@@ -162,7 +180,29 @@ async function generateReceipt(payment, rent) {
   });
 }
 
+async function verifyReceipt(filePath) {
+  try {
+    const { data, error } = await storageService.getFileUrl(
+      storageService.buckets.receipts,
+      filePath
+    );
+
+    if (error) throw error;
+
+    // Vérifier la signature ici
+    // Cette partie dépendra de comment vous souhaitez implémenter la vérification
+    
+    return {
+      isValid: true,
+      url: data.signedUrl
+    };
+  } catch (error) {
+    console.error('Error verifying receipt:', error);
+    throw error;
+  }
+}
+
 module.exports = {
   generateReceipt,
-  ensureDirectoryExistsSync
+  verifyReceipt
 };

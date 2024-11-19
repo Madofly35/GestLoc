@@ -1,78 +1,62 @@
-// backend/services/storageService.js
-
-const { supabase } = require('../config');
+const { createClient } = require('@supabase/supabase-js');
 
 class StorageService {
   constructor() {
-    // Noms des buckets
+    this.supabase = createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_KEY
+    );
+    
     this.buckets = {
-      receipts: 'receipts',
-      contracts: 'contracts',
-      documents: 'documents',
+      receipts: 'tenant-receipts',
+      contracts: 'tenant-contracts',
+      documents: 'tenant-documents',
       tickets: 'maintenance-tickets'
     };
   }
 
-  async initializeBuckets() {
-    for (const bucketName of Object.values(this.buckets)) {
-      const { error } = await supabase.storage.createBucket(bucketName, {
-        public: false, // Bucket privé
-        fileSizeLimit: 52428800 // 50MB max
-      });
-      
-      if (error && !error.message.includes('already exists')) {
-        throw error;
-      }
-    }
-  }
-
-  async uploadFile(file, bucketName, path = '') {
-    const fileName = `${Date.now()}_${file.originalname}`;
-    const filePath = path ? `${path}/${fileName}` : fileName;
-
-    const { data, error } = await supabase.storage
+  async uploadFile(file, bucketName, filePath) {
+    const { data, error } = await this.supabase.storage
       .from(bucketName)
-      .upload(filePath, file.buffer, {
+      .upload(filePath, file.buffer || file, {
         contentType: file.mimetype,
-        upsert: false
+        upsert: true
       });
 
     if (error) throw error;
 
-    // Créer URL signée valide 1 heure
-    const { data: { signedUrl } } = await supabase.storage
+    const { data: urlData } = await this.supabase.storage
       .from(bucketName)
-      .createSignedUrl(filePath, 3600);
+      .createSignedUrl(filePath, 3600); // URL valide 1h
 
     return {
       path: data.path,
-      url: signedUrl
+      url: urlData.signedUrl
     };
   }
 
+  async getFileUrl(bucketName, filePath) {
+    const { data, error } = await this.supabase.storage
+      .from(bucketName)
+      .createSignedUrl(filePath, 3600);
+
+    if (error) throw error;
+    return data.signedUrl;
+  }
+
   async deleteFile(bucketName, filePath) {
-    const { error } = await supabase.storage
+    const { error } = await this.supabase.storage
       .from(bucketName)
       .remove([filePath]);
 
     if (error) throw error;
-    return true;
+    return true;  
   }
 
-  async getFileUrl(bucketName, filePath) {
-    const { data: { signedUrl }, error } = await supabase.storage
-      .from(bucketName)
-      .createSignedUrl(filePath, 3600);
-
-    if (error) throw error;
-    return signedUrl;
-  }
-
-  // Gestion des dossiers pour les quittances
-  getReceiptPath(date, tenantId) {
+  getReceiptPath(paymentId, date, tenantId) {
     const year = date.getFullYear();
-    const month = date.toLocaleString('fr-FR', { month: 'long' });
-    return `${year}/${month}/tenant_${tenantId}`;
+    const month = date.toLocaleDateString('fr-FR', { month: 'long' });
+    return `${year}/${month}/tenant_${tenantId}/quittance_${paymentId}.pdf`;
   }
 }
 
