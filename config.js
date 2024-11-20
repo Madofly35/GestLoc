@@ -1,3 +1,4 @@
+// config.js
 require('dotenv').config();
 const { Sequelize } = require('sequelize');
 const { createClient } = require('@supabase/supabase-js');
@@ -23,10 +24,8 @@ const sequelize = new Sequelize({
       rejectUnauthorized: false
     },
     keepAlive: true,
-    // Options spécifiques pour SCRAM-SHA-256
     clientMinMessages: 'error',
-    application_name: 'gestloc_app',
-    role: process.env.DB_ROLE || 'postgres'
+    application_name: 'gestloc_app'
   },
   pool: {
     max: 5,
@@ -36,15 +35,14 @@ const sequelize = new Sequelize({
     evict: 1000
   },
   retry: {
-    max: 0,
+    max: 3,
     backoffBase: 1000,
     backoffExponent: 1.5,
   },
   logging: console.log,
   define: {
     timestamps: false,
-    underscored: true,
-    schema: 'public'
+    underscored: true
   }
 });
 
@@ -53,34 +51,31 @@ async function initializeDatabase() {
     await sequelize.authenticate();
     console.log('✅ Database connection established');
 
-    // Vérifier et créer les rôles et permissions nécessaires
+    // Vérifier et modifier les permissions
     await sequelize.query(`
       DO $$ 
       BEGIN 
-        IF NOT EXISTS (
-          SELECT FROM pg_catalog.pg_roles WHERE rolname = current_user
-        ) THEN
-          CREATE ROLE ${process.env.DB_ROLE || 'postgres'};
-        END IF;
+        ALTER TABLE IF EXISTS receipts DISABLE ROW LEVEL SECURITY;
+        ALTER TABLE IF EXISTS payments DISABLE ROW LEVEL SECURITY;
         
-        GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO ${process.env.DB_ROLE || 'postgres'};
-        GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO ${process.env.DB_ROLE || 'postgres'};
+        GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO ${process.env.DB_USER};
+        GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO ${process.env.DB_USER};
       EXCEPTION
         WHEN others THEN
           RAISE NOTICE 'Error setting up permissions: %', SQLERRM;
       END $$;
     `);
-    
+
     console.log('✅ Database permissions configured');
+    return true;
   } catch (error) {
     console.error('❌ Database initialization error:', error);
-    throw error;
+    return false;
   }
 }
 
 module.exports = {
   sequelize,
   supabase: createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY),
-  testConnection,
-  testConnectionWithPg
+  initializeDatabase
 };
