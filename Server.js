@@ -112,15 +112,18 @@ const PORT = process.env.PORT || 3000;
 // Démarrage du serveur avec initialisation de la base de données
 async function startServer() {
   try {
+    // Initialiser la base de données avec les permissions
     await initializeDatabase();
+
+    // Démarrer le serveur Express
     app.listen(PORT, () => {
-      console.log(`✅ Serveur en cours d'exécution sur le port ${PORT}`);
+      console.log(`✅ Server running on port ${PORT}`);
     });
   } catch (error) {
-    console.error('❌ Erreur lors du démarrage du serveur:', error);
+    console.error('❌ Server startup error:', error);
+    process.exit(1);
   }
 }
-
 startServer();
 
 module.exports = app;
