@@ -25,7 +25,8 @@ const sequelize = new Sequelize({
     keepAlive: true,
     // Options spécifiques pour SCRAM-SHA-256
     clientMinMessages: 'error',
-    application_name: 'gestloc_app'
+    application_name: 'gestloc_app',
+    role: process.env.DB_ROLE || 'postgres'
   },
   pool: {
     max: 5,
@@ -42,49 +43,40 @@ const sequelize = new Sequelize({
   logging: console.log,
   define: {
     timestamps: false,
-    underscored: true
+    underscored: true,
+    schema: 'public'
   }
 });
 
-const testConnection = async () => {
+async function initializeDatabase() {
   try {
     await sequelize.authenticate();
-    console.log('✅ Connexion à la base de données établie avec succès.');
-    return true;
-  } catch (error) {
-    console.error('❌ Erreur de connexion:', error.message);
-    if (error.message.includes('SASL')) {
-      console.error('⚠️ Erreur d\'authentification SASL. Vérifiez vos identifiants.');
-    }
-    return false;
-  }
-};
+    console.log('✅ Database connection established');
 
-// Créer un script de test de connexion séparé pour le débogage
-const testConnectionWithPg = async () => {
-  const { Client } = require('pg');
-  const client = new Client({
-    host: process.env.DB_HOST,
-    port: process.env.DB_PORT,
-    database: process.env.DB_NAME,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    ssl: {
-      require: true,
-      rejectUnauthorized: false
-    }
-  });
-
-  try {
-    await client.connect();
-    console.log('✅ Test de connexion PG réussi');
-    await client.end();
-    return true;
+    // Vérifier et créer les rôles et permissions nécessaires
+    await sequelize.query(`
+      DO $$ 
+      BEGIN 
+        IF NOT EXISTS (
+          SELECT FROM pg_catalog.pg_roles WHERE rolname = current_user
+        ) THEN
+          CREATE ROLE ${process.env.DB_ROLE || 'postgres'};
+        END IF;
+        
+        GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO ${process.env.DB_ROLE || 'postgres'};
+        GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO ${process.env.DB_ROLE || 'postgres'};
+      EXCEPTION
+        WHEN others THEN
+          RAISE NOTICE 'Error setting up permissions: %', SQLERRM;
+      END $$;
+    `);
+    
+    console.log('✅ Database permissions configured');
   } catch (error) {
-    console.error('❌ Test de connexion PG échoué:', error.message);
-    return false;
+    console.error('❌ Database initialization error:', error);
+    throw error;
   }
-};
+}
 
 module.exports = {
   sequelize,
