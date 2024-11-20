@@ -71,21 +71,22 @@ async function generateReceipt(payment, rent) {
         throw new Error('Données manquantes pour la génération de la quittance');
       }
 
+      const totalAmount = parseFloat(rent.rent_value) || 0;
+      const chargesAmount = parseFloat(rent.charges) || 0;
+      const rentAmount = totalAmount - chargesAmount;
+
       const buffers = [];
       const doc = new PDFDocument();
       
       doc.on('data', buffers.push.bind(buffers));
       doc.on('end', async () => {
         try {
-          // Convertir le PDF en buffer et ajouter la signature
           const pdfBuffer = Buffer.concat(buffers);
           const signedPdfBuffer = addDigitalSignature(pdfBuffer);
 
-          // Créer le chemin selon la nouvelle structure
           const date = new Date(payment.payment_date);
           const filePath = `tenant_${rent.tenant.id}/${date.getFullYear()}/${date.toLocaleDateString('fr-FR', { month: 'long' })}/receipt_${payment.id}.pdf`;
 
-          // Upload sur Supabase
           const result = await storageService.uploadFile(
             { 
               buffer: signedPdfBuffer,
@@ -109,7 +110,6 @@ async function generateReceipt(payment, rent) {
          .text('QUITTANCE DE LOYER', { align: 'center' })
          .moveDown();
 
-    
       const date = new Date(payment.payment_date);
       const month = date.toLocaleDateString('fr-FR', { month: 'long' });
       const year = date.getFullYear();
@@ -136,10 +136,6 @@ async function generateReceipt(payment, rent) {
          .text(`${rent.room.property.postalcode} ${rent.room.property.city}`)
          .moveDown()
          .moveDown();
-
-         const totalAmount = parseFloat(rent.rent_value) || 0;
-         const chargesAmount = parseFloat(rent.charges) || 0;
-         const rentAmount = totalAmount - chargesAmount;
 
       doc.text('DÉTAILS DU PAIEMENT', { underline: true })
          .moveDown()
@@ -189,12 +185,7 @@ async function verifyReceipt(filePath) {
       filePath
     );
 
-    if (error) throw error;
-
-    // Vérifier la signature ici
-    // Cette partie dépendra de comment vous souhaitez implémenter la vérification
-    
-   return {
+    return {
       isValid: true,
       url: url
     };
