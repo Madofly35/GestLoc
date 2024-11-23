@@ -98,29 +98,7 @@ const Rent = sequelize.define('Rent', {
 }, {
   tableName: 'rents',
   timestamps: false,
-  validate: {
-    async checkOverlappingRents() {
-      const overlapping = await Rent.findOne({
-        where: {
-          id_room: this.id_room,
-          [Op.and]: [
-            { date_entrance: { [Op.lte]: this.end_date || '9999-12-31' } },
-            { 
-              [Op.or]: [
-                { end_date: null },
-                { end_date: { [Op.gte]: this.date_entrance } }
-              ]
-            }
-          ],
-          id: { [Op.ne]: this.id } // Exclure la location actuelle en cas de mise à jour
-        }
-      });
 
-      if (overlapping) {
-        throw new Error('Cette période chevauche une location existante');
-      }
-    }
-  }
 });
 
 module.exports = { Rent };
