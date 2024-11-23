@@ -10,7 +10,7 @@ const {sequelize} = require('../config');
 
 // Créer une nouvelle location
 router.post('/', async (req, res) => {
-  let transaction;
+  let transaction = null;  // Initialisation explicite à null
   
   try {
     console.log('Données reçues:', req.body);
@@ -38,7 +38,9 @@ router.post('/', async (req, res) => {
     console.log('Données formatées:', rentData);
 
     // Début de la transaction
-    transaction = await sequelize.transaction();
+    transaction = await sequelize.transaction({
+      isolationLevel: sequelize.Transaction.ISOLATION_LEVELS.SERIALIZABLE
+    });
 
     // Vérification de l'existence du locataire et de la chambre
     const [tenant, room] = await Promise.all([
@@ -55,7 +57,7 @@ router.post('/', async (req, res) => {
       });
     }
 
-    // Vérification des chevauchements avant la création
+    // Vérification des chevauchements
     const overlapping = await Rent.findOne({
       where: {
         id_room: rentData.id_room,
@@ -69,6 +71,7 @@ router.post('/', async (req, res) => {
           }
         ]
       },
+      lock: true,  // Ajout d'un verrou
       transaction
     });
 
@@ -80,10 +83,16 @@ router.post('/', async (req, res) => {
     }
 
     // Création de la location
-    const rent = await Rent.create(rentData, {
-      transaction,
-      validate: false // Désactiver la validation automatique car nous l'avons fait manuellement
-    });
+    let rent;
+    try {
+      rent = await Rent.create(rentData, {
+        transaction,
+        validate: false
+      });
+    } catch (createError) {
+      await transaction.rollback();
+      throw createError;
+    }
 
     // Commit de la transaction
     await transaction.commit();
@@ -107,7 +116,14 @@ router.post('/', async (req, res) => {
     res.status(201).json(newRent);
 
   } catch (error) {
-    if (transaction) await transaction.rollback();
+    // S'assurer que la transaction est annulée en cas d'erreur
+    if (transaction) {
+      try {
+        await transaction.rollback();
+      } catch (rollbackError) {
+        console.error('Erreur lors du rollback:', rollbackError);
+      }
+    }
 
     console.error('Erreur détaillée:', {
       message: error.message,
