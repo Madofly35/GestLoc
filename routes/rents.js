@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { Sequelize, Op } = require('sequelize');
 const {Rent} = require('../models/Rent');
 const Property = require('../models/Property');
 const Room = require('../models/Room');
@@ -39,7 +40,7 @@ router.post('/', async (req, res) => {
 
     // Début de la transaction
     transaction = await sequelize.transaction({
-      isolationLevel: sequelize.Transaction.ISOLATION_LEVELS.SERIALIZABLE
+      isolationLevel: Sequelize.Transaction.ISOLATION_LEVELS.SERIALIZABLE
     });
 
     // Vérification de l'existence du locataire et de la chambre
