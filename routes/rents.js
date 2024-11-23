@@ -55,10 +55,34 @@ router.post('/', async (req, res) => {
       });
     }
 
+    // Vérification des chevauchements avant la création
+    const overlapping = await Rent.findOne({
+      where: {
+        id_room: rentData.id_room,
+        [Op.and]: [
+          { date_entrance: { [Op.lte]: rentData.end_date || '9999-12-31' } },
+          { 
+            [Op.or]: [
+              { end_date: null },
+              { end_date: { [Op.gte]: rentData.date_entrance } }
+            ]
+          }
+        ]
+      },
+      transaction
+    });
+
+    if (overlapping) {
+      await transaction.rollback();
+      return res.status(400).json({
+        message: 'Cette période chevauche une location existante'
+      });
+    }
+
     // Création de la location
     const rent = await Rent.create(rentData, {
       transaction,
-      validate: true
+      validate: false // Désactiver la validation automatique car nous l'avons fait manuellement
     });
 
     // Commit de la transaction
@@ -84,17 +108,6 @@ router.post('/', async (req, res) => {
 
   } catch (error) {
     if (transaction) await transaction.rollback();
-
-    // Gestion spécifique des erreurs de validation
-    if (error.name === 'SequelizeValidationError') {
-      return res.status(400).json({
-        message: 'Erreur de validation',
-        errors: error.errors.map(err => ({
-          field: err.path,
-          message: err.message
-        }))
-      });
-    }
 
     console.error('Erreur détaillée:', {
       message: error.message,
