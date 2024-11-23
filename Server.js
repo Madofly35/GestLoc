@@ -43,13 +43,13 @@ const app = express();
 app.use(cors({
   origin: [
     "https://gest-loc-frontend.vercel.app",
-    "https://gest-loc-frontend-gvdsg7woa-madofly35s-projects.vercel.app",
-    'https://gest-loc-frontend-1jvdf9yy9-madofly35s-projects.vercel.app',
+    "https://gest-loc-frontend-2at6zij43-madofly35s-projects.vercel.app",
     /\.vercel\.app$/ // Pour accepter tous les sous-domaines Vercel
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
+  credentials: true,
+  maxAge: 86400 
 }));
 
 // Middleware pour parser le JSON
