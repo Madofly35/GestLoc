@@ -8,6 +8,19 @@ const Tenant = require('../models/Tenant');
 const Payment = require('../models/Payment');
 const {sequelize} = require('../config');
 
+// Fonction utilitaire pour réinitialiser la séquence si nécessaire
+async function resetRentSequence(transaction) {
+  try {
+    await sequelize.query(
+      `SELECT setval(pg_get_serial_sequence('rents', 'id'), (SELECT MAX(id) FROM rents));`,
+      { transaction }
+    );
+  } catch (error) {
+    console.error('Erreur lors de la réinitialisation de la séquence:', error);
+    throw error;
+  }
+}
+
 // Créer une nouvelle location
 router.post('/', async (req, res) => {
   let transaction = null;
@@ -37,22 +50,41 @@ router.post('/', async (req, res) => {
 
     console.log('Données formatées:', rentData);
 
-    // Démarrer la transaction
-    transaction = await sequelize.transaction();
+    // Démarrer la transaction avec un niveau d'isolation approprié
+    transaction = await sequelize.transaction({
+      isolationLevel: Sequelize.Transaction.ISOLATION_LEVELS.SERIALIZABLE
+    });
+
+    // Réinitialiser la séquence avant l'insertion
+    await resetRentSequence(transaction);
 
     // Vérification de l'existence du locataire et de la chambre
-    const tenant = await Tenant.findByPk(rentData.id_tenant, { transaction });
-    const room = await Room.findByPk(rentData.id_room, { transaction });
+    const [tenant, room] = await Promise.all([
+      Tenant.findByPk(rentData.id_tenant, { transaction }),
+      Room.findByPk(rentData.id_room, { transaction })
+    ]);
 
     if (!tenant || !room) {
-      await transaction.rollback();
-      return res.status(404).json({ 
-        message: !tenant ? 'Locataire non trouvé' : 'Chambre non trouvée' 
-      });
+      throw new Error(!tenant ? 'Locataire non trouvé' : 'Chambre non trouvée');
     }
 
-    // Création simple de la location
-    const rent = await Rent.create(rentData, { transaction });
+    // Création de la location avec gestion des erreurs de séquence
+    let rent;
+    try {
+      rent = await Rent.create(rentData, { 
+        transaction,
+        retry: {
+          max: 0
+        }
+      });
+    } catch (error) {
+      if (error.name === 'SequelizeUniqueConstraintError') {
+        await resetRentSequence(transaction);
+        rent = await Rent.create(rentData, { transaction });
+      } else {
+        throw error;
+      }
+    }
 
     // Commit de la transaction
     await transaction.commit();
@@ -86,9 +118,20 @@ router.post('/', async (req, res) => {
       }
     }
 
+    if (error.message.includes('trouvé')) {
+      return res.status(404).json({
+        message: error.message
+      });
+    }
+
     res.status(500).json({
       message: 'Erreur lors de la création de la location',
-      error: error.message
+      error: process.env.NODE_ENV === 'development' ? {
+        message: error.message,
+        name: error.name,
+        sql: error.sql,
+        parameters: error.parameters
+      } : error.message
     });
   }
 });
@@ -101,7 +144,12 @@ router.get('/', async (req, res) => {
         {
           model: Room,
           as: 'room',
-          attributes: ['room_nb']
+          attributes: ['room_nb'],
+          include: [{
+            model: Property,
+            as: 'property',
+            attributes: ['name', 'address']
+          }]
         },
         {
           model: Tenant,
@@ -117,12 +165,12 @@ router.get('/', async (req, res) => {
     console.error('Erreur récupération locations:', error);
     res.status(500).json({ 
       message: 'Erreur lors de la récupération des locations',
-      error: error.message 
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Erreur serveur'
     });
   }
 });
 
-// Récupérer une location par son ID
+// Récupérer une location par ID
 router.get('/:id', async (req, res) => {
   try {
     const rent = await Rent.findByPk(req.params.id, {
@@ -130,7 +178,12 @@ router.get('/:id', async (req, res) => {
         {
           model: Room,
           as: 'room',
-          attributes: ['room_nb']
+          attributes: ['room_nb'],
+          include: [{
+            model: Property,
+            as: 'property',
+            attributes: ['name', 'address']
+          }]
         },
         {
           model: Tenant,
@@ -153,26 +206,28 @@ router.get('/:id', async (req, res) => {
     console.error('Erreur récupération location:', error);
     res.status(500).json({ 
       message: 'Erreur lors de la récupération de la location',
-      error: error.message 
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Erreur serveur'
     });
   }
 });
 
 // Mettre à jour une location
 router.put('/:id', async (req, res) => {
-  const transaction = await sequelize.transaction();
+  let transaction = null;
 
   try {
-    const rentId = req.params.id;
-    
-    // 1. Récupérer l'ancienne location
-    const oldRent = await Rent.findByPk(rentId);
-    if (!oldRent) {
+    transaction = await sequelize.transaction({
+      isolationLevel: Sequelize.Transaction.ISOLATION_LEVELS.SERIALIZABLE
+    });
+
+    // Vérifier l'existence de la location
+    const rent = await Rent.findByPk(req.params.id, { transaction });
+    if (!rent) {
       await transaction.rollback();
       return res.status(404).json({ message: 'Location non trouvée' });
     }
 
-    // 2. Vérifier l'existence du locataire et de la chambre si modifiés
+    // Vérifier l'existence du locataire et de la chambre si modifiés
     if (req.body.id_tenant) {
       const tenant = await Tenant.findByPk(req.body.id_tenant, { transaction });
       if (!tenant) {
@@ -189,27 +244,37 @@ router.put('/:id', async (req, res) => {
       }
     }
 
-    // 3. Mise à jour de la location
-    const updatedData = {
-      id_tenant: req.body.id_tenant || oldRent.id_tenant,
-      id_room: req.body.id_room || oldRent.id_room,
-      date_entrance: req.body.date_entrance || oldRent.date_entrance,
-      end_date: req.body.end_date || oldRent.end_date,
-      rent_value: req.body.rent_value || oldRent.rent_value,
-      charges: req.body.charges || oldRent.charges
+    // Préparation des données de mise à jour
+    const updateData = {
+      id_tenant: req.body.id_tenant || rent.id_tenant,
+      id_room: req.body.id_room || rent.id_room,
+      date_entrance: req.body.date_entrance ? 
+        new Date(req.body.date_entrance).toISOString().split('T')[0] : 
+        rent.date_entrance,
+      end_date: req.body.end_date ? 
+        new Date(req.body.end_date).toISOString().split('T')[0] : 
+        rent.end_date,
+      rent_value: req.body.rent_value || rent.rent_value,
+      charges: req.body.charges !== undefined ? req.body.charges : rent.charges
     };
 
-    await oldRent.update(updatedData, { transaction });
+    // Mise à jour de la location
+    await rent.update(updateData, { transaction });
 
     await transaction.commit();
 
-    // 4. Récupérer la location mise à jour avec ses relations
-    const updatedRent = await Rent.findByPk(rentId, {
+    // Récupération des données mises à jour
+    const updatedRent = await Rent.findByPk(req.params.id, {
       include: [
         {
           model: Room,
           as: 'room',
-          attributes: ['room_nb']
+          attributes: ['room_nb'],
+          include: [{
+            model: Property,
+            as: 'property',
+            attributes: ['name', 'address']
+          }]
         },
         {
           model: Tenant,
@@ -226,32 +291,56 @@ router.put('/:id', async (req, res) => {
     res.json(updatedRent);
 
   } catch (error) {
-    await transaction.rollback();
     console.error('Erreur lors de la mise à jour:', error);
-    res.status(500).json({ 
+
+    if (transaction) {
+      try {
+        await transaction.rollback();
+      } catch (rollbackError) {
+        console.error('Erreur lors du rollback:', rollbackError);
+      }
+    }
+
+    res.status(500).json({
       message: 'Erreur lors de la mise à jour de la location',
-      error: error.message
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Erreur serveur'
     });
   }
 });
 
 // Supprimer une location
 router.delete('/:id', async (req, res) => {
+  let transaction = null;
+
   try {
-    const rent = await Rent.findByPk(req.params.id);
+    transaction = await sequelize.transaction();
+
+    const rent = await Rent.findByPk(req.params.id, { transaction });
     
     if (!rent) {
+      await transaction.rollback();
       return res.status(404).json({ message: 'Location non trouvée' });
     }
 
-    await rent.destroy();
+    await rent.destroy({ transaction });
+    await transaction.commit();
+    
     res.json({ message: 'Location supprimée avec succès' });
 
   } catch (error) {
     console.error('Erreur suppression location:', error);
+    
+    if (transaction) {
+      try {
+        await transaction.rollback();
+      } catch (rollbackError) {
+        console.error('Erreur lors du rollback:', rollbackError);
+      }
+    }
+
     res.status(500).json({ 
       message: 'Erreur lors de la suppression de la location',
-      error: error.message 
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Erreur serveur'
     });
   }
 });
