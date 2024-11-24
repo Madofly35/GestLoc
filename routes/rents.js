@@ -10,7 +10,7 @@ const {sequelize} = require('../config');
 
 // Créer une nouvelle location
 router.post('/', async (req, res) => {
-  let transaction = null;  // Initialisation explicite à null
+  let transaction = null;
   
   try {
     console.log('Données reçues:', req.body);
@@ -37,95 +37,38 @@ router.post('/', async (req, res) => {
 
     console.log('Données formatées:', rentData);
 
-    // Début de la transaction
-    transaction = await sequelize.transaction({
-      isolationLevel: Sequelize.Transaction.ISOLATION_LEVELS.SERIALIZABLE
-    });
+    // Commencer une transaction simple
+    transaction = await sequelize.transaction();
 
     // Vérification de l'existence du locataire et de la chambre
-    const [tenant, room] = await Promise.all([
-      Tenant.findByPk(rentData.id_tenant, { transaction }),
-      Room.findByPk(rentData.id_room, { transaction })
-    ]);
+    const tenant = await Tenant.findByPk(rentData.id_tenant, { transaction });
+    const room = await Room.findByPk(rentData.id_room, { transaction });
 
     if (!tenant || !room) {
-      await transaction.rollback();
-      return res.status(400).json({
-        message: !tenant ? 'Locataire non trouvé' : 'Chambre non trouvée',
-        id_tenant: rentData.id_tenant,
-        id_room: rentData.id_room
-      });
+      throw new Error(!tenant ? 'Locataire non trouvé' : 'Chambre non trouvée');
     }
 
     // Vérification des chevauchements
     const overlapping = await Rent.findOne({
       where: {
         id_room: rentData.id_room,
-        id: { [Op.ne]: rentData.id || 0 }, // Exclure la location en cours de modification
-        [Op.or]: [
-          // Cas 1: nouvelle date_entrance est pendant une location existante
-          {
-            [Op.and]: [
-              { date_entrance: { [Op.lte]: rentData.date_entrance } },
-              { 
-                [Op.or]: [
-                  { end_date: null },
-                  { end_date: { [Op.gte]: rentData.date_entrance } }
-                ]
-              }
-            ]
-          },
-          // Cas 2: nouvelle end_date est pendant une location existante
-          {
-            [Op.and]: [
-              { date_entrance: { [Op.lte]: rentData.end_date || '9999-12-31' } },
-              {
-                [Op.or]: [
-                  { end_date: null },
-                  { end_date: { [Op.gte]: rentData.date_entrance } }
-                ]
-              }
-            ]
-          }
-        ]
+        [Op.and]: {
+          date_entrance: { [Op.lte]: rentData.end_date || '9999-12-31' },
+          [Op.or]: [
+            { end_date: null },
+            { end_date: { [Op.gte]: rentData.date_entrance } }
+          ]
+        }
       },
       transaction
     });
-    
+
     if (overlapping) {
-      console.log('Chevauchement trouvé:', overlapping.toJSON());
-      await transaction.rollback();
-      return res.status(400).json({
-        message: 'Cette période chevauche une location existante',
-        details: {
-          conflictingRent: {
-            id: overlapping.id,
-            date_entrance: overlapping.date_entrance,
-            end_date: overlapping.end_date
-          }
-        }
-      });
+      throw new Error('Cette période chevauche une location existante');
     }
 
-
-    console.log('Vérification des dates:', {
-      date_entrance: rentData.date_entrance,
-      end_date: rentData.end_date,
-      formatted_end_date: rentData.end_date || '9999-12-31'
-    });
-
-    
     // Création de la location
-    let rent;
-    try {
-      rent = await Rent.create(rentData, {
-        transaction,
-        validate: false
-      });
-    } catch (createError) {
-      await transaction.rollback();
-      throw createError;
-    }
+    const rent = await Rent.create(rentData, { transaction });
 
     // Commit de la transaction
     await transaction.commit();
@@ -149,7 +92,8 @@ router.post('/', async (req, res) => {
     res.status(201).json(newRent);
 
   } catch (error) {
-    // S'assurer que la transaction est annulée en cas d'erreur
+    console.error('Erreur lors de la création:', error);
+
     if (transaction) {
       try {
         await transaction.rollback();
@@ -158,11 +102,13 @@ router.post('/', async (req, res) => {
       }
     }
 
-    console.error('Erreur détaillée:', {
-      message: error.message,
-      name: error.name,
-      errors: error.errors
-    });
+    // Envoyer une réponse d'erreur appropriée
+    if (error.message.includes('chevauche') || 
+        error.message.includes('trouvé')) {
+      return res.status(400).json({
+        message: error.message
+      });
+    }
 
     res.status(500).json({
       message: 'Erreur lors de la création de la location',
