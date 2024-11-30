@@ -10,7 +10,6 @@ router.get('/tenants/:tenantId/receipts', async (req, res) => {
     const { tenantId } = req.params;
     console.log('🟦 Fetching receipts for tenant:', tenantId);
     
-    // Récupérer toutes les locations du locataire
     const rents = await Rent.findAll({
       where: { id_tenant: tenantId },
       include: [
@@ -37,7 +36,6 @@ router.get('/tenants/:tenantId/receipts', async (req, res) => {
       end: rent.end_date
     })));
 
-    // Récupérer tous les paiements associés à ces locations
     const rentIds = rents.map(rent => rent.id);
     const payments = await Payment.findAll({
       where: {
@@ -73,13 +71,6 @@ router.get('/tenants/:tenantId/receipts', async (req, res) => {
       order: [['payment_date', 'DESC']]
     });
 
-    console.log('✅ Found payments:', payments.map(payment => ({
-      id: payment.id,
-      date: payment.payment_date,
-      tenant: payment.rent?.tenant?.first_name + ' ' + payment.rent?.tenant?.last_name,
-      amount: payment.amount
-    })));
-
     const formattedPayments = await Promise.all(payments.map(async payment => {
       if (!payment.rent?.tenant || !payment.rent?.room?.property) {
         console.warn('⚠️ Missing data for payment:', payment.id);
@@ -104,11 +95,16 @@ router.get('/tenants/:tenantId/receipts', async (req, res) => {
         }
       };
 
-      // Ajouter l'URL Supabase si la quittance existe
       if (payment.paymentReceipt) {
         try {
-          const filePath = `tenant_${tenantId}/${paymentDate.getFullYear()}/${paymentDate.toLocaleDateString('fr-FR', { month: 'long' })}/receipt_${payment.id}.pdf`;
-          fileData.receipt_url = await storageService.getFileUrl(storageService.buckets.receipts, filePath);
+          const filePath = payment.paymentReceipt.storage_path;
+          if (filePath) {
+            const { data: { publicUrl } } = await storageService.supabase
+              .storage
+              .from(storageService.buckets.receipts)
+              .getPublicUrl(filePath);
+            fileData.receipt_url = publicUrl;
+          }
         } catch (error) {
           console.warn('⚠️ Error getting receipt URL:', error);
         }
@@ -174,15 +170,10 @@ router.get('/receipts/:paymentId/download', async (req, res) => {
     }
 
     try {
-      console.log('🟦 Payment data:', {
-        id: payment.id,
-        amount: payment.amount,
-        tenant: payment.rent.tenant.first_name + ' ' + payment.rent.tenant.last_name
-      });
-
       let receipt = payment.paymentReceipt;
-      let fileUrl;
+      let pdfBuffer;
 
+      // Génération ou récupération de la quittance
       if (!receipt) {
         console.log('🟦 No receipt found, generating new one...');
         const result = await generateReceipt(payment, payment.rent);
@@ -190,33 +181,59 @@ router.get('/receipts/:paymentId/download', async (req, res) => {
         receipt = await Receipt.create({
           payment_id: payment.id,
           storage_path: result.path,
-          storage_url: result.url,
           generated_at: new Date()
         });
 
-        fileUrl = result.url;
-        console.log('✅ New receipt created:', receipt.id);
+        // Récupérer le buffer du fichier nouvellement créé
+        const { data, error } = await storageService.supabase
+          .storage
+          .from(storageService.buckets.receipts)
+          .download(result.path);
+
+        if (error) throw error;
+        pdfBuffer = Buffer.from(await data.arrayBuffer());
+
       } else {
-        try {
-          fileUrl = await storageService.getFileUrl(
-            storageService.buckets.receipts, 
-            receipt.storage_path
-          );
-        } catch (error) {
+        // Récupérer le fichier existant
+        const { data, error } = await storageService.supabase
+          .storage
+          .from(storageService.buckets.receipts)
+          .download(receipt.storage_path);
+
+        if (error) {
           console.log('🟦 Error getting existing receipt, regenerating...');
           const result = await generateReceipt(payment, payment.rent);
           await receipt.update({ 
-            storage_path: result.path,
-            storage_url: result.url 
+            storage_path: result.path
           });
-          fileUrl = result.url;
+
+          const { data: newData, error: newError } = await storageService.supabase
+            .storage
+            .from(storageService.buckets.receipts)
+            .download(result.path);
+
+          if (newError) throw newError;
+          pdfBuffer = Buffer.from(await newData.arrayBuffer());
+        } else {
+          pdfBuffer = Buffer.from(await data.arrayBuffer());
         }
       }
 
       // Mettre à jour la date de téléchargement
       await receipt.update({ downloaded_at: new Date() });
 
-      res.json({ url: fileUrl });
+      // Envoyer le fichier
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="quittance_${
+          payment.rent.tenant.last_name.toLowerCase()
+        }_${new Date(payment.payment_date).toLocaleDateString('fr-FR', {
+          month: 'long',
+          year: 'numeric'
+        }).replace(' ', '_')}.pdf"`
+      );
+      res.send(pdfBuffer);
 
     } catch (genError) {
       console.error('🔴 Error generating/sending receipt:', genError);
