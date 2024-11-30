@@ -15,6 +15,24 @@ const upload = multer({
   }
 });
 
+const ensureBucketExists = async () => {
+  try {
+    const { data: buckets } = await storageService.supabase.storage.listBuckets();
+    const bucketExists = buckets.some(b => b.name === 'tenant-receipts');
+    
+    if (!bucketExists) {
+      const { error } = await storageService.supabase.storage.createBucket('tenant-receipts', {
+        public: true // Rend le bucket public
+      });
+      if (error) throw error;
+    }
+  } catch (error) {
+    console.error('Bucket creation error:', error);
+    throw error;
+  }
+};
+
+
 // Route de téléchargement des quittances
 router.get('/receipts/:id/download', async (req, res) => {
   try {

@@ -87,23 +87,30 @@ async function generateReceipt(payment, rent) {
           const date = new Date(payment.payment_date);
           const filePath = `tenant_${rent.tenant.id}/${date.getFullYear()}/${date.toLocaleDateString('fr-FR', { month: 'long' })}/receipt_${payment.id}.pdf`;
 
-          const result = await storageService.uploadFile(
-            { 
-              buffer: signedPdfBuffer,
-              mimetype: 'application/pdf'
-            },
-            storageService.buckets.receipts,
-            filePath
-          );
-
-          resolve({
-            path: filePath,
-            url: result.url
-          });
+          try {
+            const result = await storageService.uploadFile(
+              { 
+                buffer: signedPdfBuffer,
+                mimetype: 'application/pdf'
+              },
+              storageService.buckets.receipts,
+              filePath
+            );
+    
+            resolve({
+              path: filePath,
+              url: result.url
+            });
+          } catch (uploadError) {
+            console.error('Upload error:', uploadError);
+            reject(uploadError);
+          }
         } catch (error) {
+          console.error('Receipt generation error:', error);
           reject(error);
         }
       });
+    
 
       // Contenu du PDF
       doc.fontSize(20)

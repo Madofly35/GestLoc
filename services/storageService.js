@@ -26,23 +26,33 @@ class StorageService {
   }
 
   async uploadFile(file, bucketName, filePath) {
-    const { data, error } = await this.supabase.storage
-      .from(bucketName)
-      .upload(filePath, file.buffer || file, {
-        contentType: file.mimetype || 'application/pdf',
-        upsert: true
-      });
-
-    if (error) throw error;
-
-    const { data: urlData } = await this.supabase.storage
-      .from(bucketName)
-      .createSignedUrl(filePath, 3600); // URL valide 1h
-
-    return {
-      path: filePath,
-      url: urlData.signedUrl
-    };
+    try {
+      const { data, error } = await this.supabase.storage
+        .from(bucketName)
+        .upload(filePath, file.buffer || file, {
+          contentType: file.mimetype || 'application/pdf',
+          upsert: true,
+          public: true // Rend le fichier publiquement accessible
+        });
+  
+      if (error) {
+        console.error('Storage upload error:', error);
+        throw error;
+      }
+  
+      // Créer une URL publique au lieu d'une URL signée
+      const { data: publicUrl } = await this.supabase.storage
+        .from(bucketName)
+        .getPublicUrl(filePath);
+  
+      return {
+        path: filePath,
+        url: publicUrl.publicUrl
+      };
+    } catch (error) {
+      console.error('Storage service error:', error);
+      throw error;
+    }
   }
 
   async getFileUrl(bucketName, filePath) {
