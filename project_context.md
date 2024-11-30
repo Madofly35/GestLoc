@@ -53,7 +53,7 @@ app.use(cors({
   origin: [
     "https://gest-loc-frontend.vercel.app",
     "https://gest-loc-frontend-2at6zij43-madofly35s-projects.vercel.app",
-    "https://gest-loc-frontend-acyev48su-madofly35s-projects.vercel.app",
+    "https://gest-loc-frontend-kxrdlncw8-madofly35s-projects.vercel.app",
     /\.vercel\.app$/ // Pour accepter tous les sous-domaines Vercel
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
